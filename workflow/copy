@@ -1,0 +1,32 @@
+from snakemake.utils import min_version
+
+##### set minimum snakemake version #####
+min_version("7.8.5")
+
+##### setup report ########
+configfile: "config.json"
+
+##### load rules ##########
+include: "rules/common.smk"
+
+samplesheet = pd.read_csv(config["samplesheet"], sep="\t", dtype={"sampleID": str, "read1": str, "read2": str}).set_index("sampleID")
+SAMPLES = samplesheet.index.tolist()
+
+rule all:
+    input:
+        expand("qc/{sample}_1", sample=SAMPLES),
+        expand("qc/{sample}_2", sample=SAMPLES)
+
+rule fastqc:
+    input:
+        r1="data/{sample}_1.fastq",
+        r2="data/{sample}_2.fastq"
+    output:
+        out1=directory("qc/{sample}_1"), 
+        out2=directory("qc/{sample}_2")
+    conda:
+        "envs/fastqc.yaml"
+    shell:
+        """
+        mkdir -p {output.out1} {output.out2} && fastqc -o {output.out1} {input.r1} && fastqc -o {output.out2} {input.r2}
+        """

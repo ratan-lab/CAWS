@@ -1,0 +1,72 @@
+from snakemake.utils import min_version
+
+##### set minimum snakemake version #####
+min_version("7.8.5")
+
+##### setup report ########
+configfile: "config.json"
+
+##### load rules ##########
+include: "rules/common.smk"
+
+samplesheet = pd.read_csv(config["samplesheet"], sep="\t", dtype={"sampleID": str, "read1": str, "read2": str}).set_index("sampleID")
+SAMPLES = samplesheet.index.tolist()
+
+def r1_from_sample(wildcards):
+    return samplesheet.loc[wildcards.sample]['read1']
+
+def r2_from_sample(wildcards):
+    return samplesheet.loc[wildcards.sample]['read2']
+
+rule all:
+    input:
+        expand("qc/{sample}_1", sample=SAMPLES),
+        expand("qc/{sample}_2", sample=SAMPLES),
+        expand("alignments/{sample}.sam", sample=SAMPLES),
+        expand("alignments/{sample}.txt", sample=SAMPLES),
+
+
+rule fastqc:
+    input:
+        r1=r1_from_sample,
+        r2=r2_from_sample
+    output:
+        out1=directory("qc/{sample}_1"), 
+        out2=directory("qc/{sample}_2")
+    conda:
+        "envs/fastqc.yaml"
+    shell:
+        """
+        mkdir -p {output.out1} {output.out2} && fastqc -o {output.out1} {input.r1} && fastqc -o {output.out2} {input.r2}
+        """
+
+rule trimgalore:
+    input:
+        r1=r1_from_sample,
+        r2=r2_from_sample
+    output:
+        out1="trimmed/{sample}_R1_val_1.fq.gz",
+        out2="trimmed/{sample}_R2_val_2.fq.gz"
+    conda:
+        "envs/trim_galore.yaml"
+    shell:
+        """
+        trim_galore --gzip --trim-n -o trimmed --basename {wildcards.sample} --paired {input.r1} {input.r2}
+        """
+
+rule bowtie:
+    input:
+        ref=config["reference"],
+        r1="trimmed/{sample}_R1_val_1.fq.gz",
+        r2="trimmed/{sample}_R2_val_2.fq.gz"
+    output:
+        sam="alignments/{sample}.sam",
+        log="alignments/{sample}.txt"
+    conda:
+        "envs/bowtie.yaml"
+    threads:
+        2
+    shell:
+        """
+        bowtie2 --local --very-sensitive --no-mixed --no-discordant --phred33 -I 10 -X 700 -p {threads} -x {input.ref} -1 {input.r1} -2 {input.r2} -S {output.sam} &> {output.log}
+        """
