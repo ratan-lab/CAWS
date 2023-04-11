@@ -51,7 +51,7 @@ module load snakemake
 
 snakemake \
     --cores 1 \
-    --configfile config.hg38.json \
+    --configfile config.json \
     --conda-frontend mamba \
     --latency-wait 60 \
     --notemp \
