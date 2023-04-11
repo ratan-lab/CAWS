@@ -1,4 +1,16 @@
 {
     "samplesheet": "",
-    "reference": ""
+    "reference_fa": "",
+    "bt2_idx": "",
+    "reference_fai": "",
+    "chromosome_file": "", 
+    "blacklist": "",
+    "ecoli_reference": "",
+    "ecoli_bt2_idx": "",
+    "trim_adapters": ,
+    "igg_control": false,
+    "mt_chrom": "",
+    "dedup": ,
+    "minquality": 3,
+    "outdir": ""
 }

@@ -3,5 +3,5 @@ channels:
   - bioconda
   - defaults
 dependencies:
-  - bowtie2=2.5.1=py310h8d7afc0_0
+  - picard=3.0.0=hdfd78af_1
 

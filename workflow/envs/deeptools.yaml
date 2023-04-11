@@ -3,5 +3,4 @@ channels:
   - bioconda
   - defaults
 dependencies:
-  - bowtie2=2.5.1=py310h8d7afc0_0
-
+  - deeptools=3.5.1=pyhdfd78af_1
