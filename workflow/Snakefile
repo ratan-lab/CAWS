@@ -4,24 +4,32 @@ import os
 ##### set minimum snakemake version #####
 min_version("6.0.0")
 
+
 ##### load rules ##########
 include: "rules/common.smk"
 
+
 workdir: config["outdir"]
 
-samplesheet = pd.read_csv(config["samplesheet"], sep="\t", 
-                          dtype={"sampleID": str, 
-                                 "condition": str, 
-                                 "replicate": str,
-                                 "read1": str, 
-                                 "read2": str}).set_index("sampleID")
+
+samplesheet = pd.read_csv(
+    config["samplesheet"],
+    sep="\t",
+    dtype={
+        "sampleID": str,
+        "condition": str,
+        "replicate": str,
+        "read1": str,
+        "read2": str,
+    },
+).set_index("sampleID")
 
 # TODO: check the sample names in 'sampleID' are unique
 
-# TODO: check that each 'group' in my samplesheet has one sample with 
+# TODO: check that each 'group' in my samplesheet has one sample with
 # 'condition' as  "Control" if IgG control is included
 
-# implement get_control so that the correct replicate is assigned when using 
+# implement get_control so that the correct replicate is assigned when using
 # IgG controls
 
 # TODO: check that read files exist and can be read
@@ -29,7 +37,7 @@ samplesheet = pd.read_csv(config["samplesheet"], sep="\t",
 # TODO: only one stats file should be generated. A left join of the two stats
 # files I generate currently should suffice.
 
-# TODO: Several of the output files are not needed at the end. Use temp to 
+# TODO: Several of the output files are not needed at the end. Use temp to
 # remove them after they are not needed
 
 dir = config["outdir"] + "/logs"
@@ -37,8 +45,9 @@ if not os.path.exists(dir):
     os.makedirs(dir)
 
 SAMPLES = samplesheet.index.tolist()
-EXPERIMENT = samplesheet[samplesheet['condition'] != "Control"].index.tolist()
-CONTROL = samplesheet[samplesheet['condition'] == "Control"].index.tolist()
+EXPERIMENT = samplesheet[samplesheet["condition"] != "Control"].index.tolist()
+CONTROL = samplesheet[samplesheet["condition"] == "Control"].index.tolist()
+
 
 rule all:
     input:
@@ -51,17 +60,21 @@ rule all:
         "stats/peaks_reproducibility.txt",
         "stats/peaks_frip.txt",
         "stats/peaks_fig.pdf",
-        expand("stats/{sample}.heatmap.png", sample=EXPERIMENT)
+        expand("stats/{sample}.heatmap.png", sample=EXPERIMENT),
+        expand("peaks/macs3/{sample}_peaks.xls", sample=EXPERIMENT),
+        expand("peaks/macs3/{sample}_peaks.narrowPeak", sample=EXPERIMENT),
+        expand("peaks/macs3/{sample}_summits.bed", sample=EXPERIMENT)
+
 
 rule check_quality:
     input:
         r1="trimmed/{sample}_val_1.fq.gz" if config["trim_adapters"] else r1_from_sample,
-        r2="trimmed/{sample}_val_2.fq.gz" if config["trim_adapters"] else r2_from_sample
+        r2="trimmed/{sample}_val_2.fq.gz" if config["trim_adapters"] else r2_from_sample,
     output:
-        out1=directory("qc/{sample}_1"), 
-        out2=directory("qc/{sample}_2")
+        out1=directory("qc/{sample}_1"),
+        out2=directory("qc/{sample}_2"),
     log:
-        "logs/check_quality/{sample}.log"
+        "logs/check_quality/{sample}.log",
     conda:
         "envs/fastqc.yaml"
     shell:
@@ -69,15 +82,16 @@ rule check_quality:
         mkdir -p {output.out1} {output.out2} && fastqc -o {output.out1} {input.r1} && fastqc -o {output.out2} {input.r2}
         """
 
+
 rule trim_adapters:
     input:
         r1=r1_from_sample,
-        r2=r2_from_sample
+        r2=r2_from_sample,
     output:
         out1="trimmed/{sample}_val_1.fq.gz",
-        out2="trimmed/{sample}_val_2.fq.gz"
+        out2="trimmed/{sample}_val_2.fq.gz",
     log:
-        "logs/trim_adapters/{sample}.log"
+        "logs/trim_adapters/{sample}.log",
     conda:
         "envs/trim_galore.yaml"
     shell:
@@ -85,51 +99,52 @@ rule trim_adapters:
         trim_galore --gzip --trim-n -o trimmed --basename {wildcards.sample} --paired {input.r1} {input.r2}
         """
 
+
 rule align_reads:
     input:
         ref=config["reference_fa"],
         r1="trimmed/{sample}_val_1.fq.gz" if config["trim_adapters"] else r1_from_sample,
-        r2="trimmed/{sample}_val_2.fq.gz" if config["trim_adapters"] else r2_from_sample
+        r2="trimmed/{sample}_val_2.fq.gz" if config["trim_adapters"] else r2_from_sample,
     output:
         sam="alignments/{sample}.sam",
-        log="alignments/{sample}.alignments.txt"
+        log="alignments/{sample}.alignments.txt",
     log:
-        "logs/align_reads/{sample}.log"
+        "logs/align_reads/{sample}.log",
     conda:
         "envs/bowtie.yaml"
-    threads:
-        8
+    threads: 8
     params:
         aln="--local" if config["trim_adapters"] else "--end-to-end",
-        ref=config["bt2_idx"]
+        ref=config["bt2_idx"],
     shell:
         """
         bowtie2 {params.aln} --very-sensitive --no-mixed --no-discordant --phred33 -I 10 -X 700 -p {threads} -x {params.ref} -1 {input.r1} -2 {input.r2} -S {output.sam} |& tee {output.log}
         """
 
+
 rule convert_to_binary:
     input:
-        "alignments/{sample}.sam"
+        "alignments/{sample}.sam",
     output:
         bam="alignments/{sample}.sorted.bam",
     log:
-        "logs/convert_to_binary/{sample}.log"
+        "logs/convert_to_binary/{sample}.log",
     conda:
         "envs/samtools.yaml"
-    threads:
-        2
+    threads: 2
     shell:
         """
         samtools view -S -b {input} | samtools sort -@ {threads} -o {output.bam}
         """
 
+
 rule index_bam:
     input:
-        bam="alignments/{sample}.sorted.bam"
+        bam="alignments/{sample}.sorted.bam",
     output:
-        bai="alignments/{sample}.sorted.bam.bai"
+        bai="alignments/{sample}.sorted.bam.bai",
     log:
-        "logs/index_bam/{sample}.log"
+        "logs/index_bam/{sample}.log",
     conda:
         "envs/samtools.yaml"
     shell:
@@ -137,15 +152,16 @@ rule index_bam:
         samtools index {input.bam}
         """
 
+
 rule remove_duplicates:
     input:
         bam="alignments/{sample}.sorted.bam",
-        bai="alignments/{sample}.sorted.bam.bai"
+        bai="alignments/{sample}.sorted.bam.bai",
     output:
         bam="dedupalignments/{sample}.sorted.bam",
-        metrics="dedupalignments/{sample}.rmdup.txt"
+        metrics="dedupalignments/{sample}.rmdup.txt",
     log:
-        "logs/remove_duplicates/{sample}.log"
+        "logs/remove_duplicates/{sample}.log",
     conda:
         "envs/picard.yaml"
     shell:
@@ -154,72 +170,77 @@ rule remove_duplicates:
         picard MarkDuplicates -I {input.bam} -O {output.bam} -METRICS_FILE {output.metrics} -REMOVE_DUPLICATES true
         """
 
+
 use rule index_bam as index_dedup_bam with:
     input:
-        bam="dedupalignments/{sample}.sorted.bam"
+        bam="dedupalignments/{sample}.sorted.bam",
     output:
-        bai="dedupalignments/{sample}.sorted.bam.bai"
+        bai="dedupalignments/{sample}.sorted.bam.bai",
     log:
-        "logs/index_dedup_bam/{sample}.log"        
+        "logs/index_dedup_bam/{sample}.log",
+
 
 rule find_mtdna_reads:
     input:
         bam="alignments/{sample}.sorted.bam",
-        bai="alignments/{sample}.sorted.bam.bai"
+        bai="alignments/{sample}.sorted.bam.bai",
     output:
-        "alignments/{sample}.mtdna.txt"
+        "alignments/{sample}.mtdna.txt",
     log:
-        "logs/find_mtdna_reads/{sample}.log"
+        "logs/find_mtdna_reads/{sample}.log",
     conda:
         "envs/samtools.yaml"
     params:
-        mtdna=config["mt_chrom"]
+        mtdna=config["mt_chrom"],
     shell:
         """
         samtools view -f0x40 {input.bam} {params.mtdna} | wc -l > {output}
         """
 
+
 rule find_ecoli_reads:
     input:
         ref=config["ecoli_reference"],
         r1="trimmed/{sample}_val_1.fq.gz" if config["trim_adapters"] else r1_from_sample,
-        r2="trimmed/{sample}_val_2.fq.gz" if config["trim_adapters"] else r2_from_sample
+        r2="trimmed/{sample}_val_2.fq.gz" if config["trim_adapters"] else r2_from_sample,
     output:
         sam=temp("alignments/{sample}.ecoli.sam"),
-        txt="alignments/{sample}.ecoli.txt"
+        txt="alignments/{sample}.ecoli.txt",
     log:
-        "logs/find_ecoli_reads/{sample}.log"
+        "logs/find_ecoli_reads/{sample}.log",
     conda:
         "envs/bowtie.yaml"
     params:
-        ref=config["ecoli_bt2_idx"]
+        ref=config["ecoli_bt2_idx"],
     shell:
         """
         bowtie2 --end-to-end --very-sensitive --no-mixed --no-discordant --phred33 -I 10 -X 700 -p {threads} -x {params.ref} -1 {input.r1} -2 {input.r2} -S {output.sam} &> {output.txt}
         """
+
 
 rule report_on_alignments:
     input:
         aln=expand("alignments/{sample}.alignments.txt", sample=SAMPLES),
         mtn=expand("alignments/{sample}.mtdna.txt", sample=SAMPLES),
         dup=expand("dedupalignments/{sample}.rmdup.txt", sample=SAMPLES),
-        eco=expand("alignments/{sample}.ecoli.txt", sample=SAMPLES)
+        eco=expand("alignments/{sample}.ecoli.txt", sample=SAMPLES),
     output:
-        report("stats/stats.txt", caption="report/alignment.rst")
+        report("stats/stats.txt", caption="report/alignment.rst"),
     log:
-        "logs/report_on_alignments/job.log"
+        "logs/report_on_alignments/job.log",
     conda:
         "envs/R.yaml"
     script:
         "scripts/run_alignment_report.R"
 
+
 rule fragment_size:
     input:
-        "alignments/{sample}.sorted.bam"
+        "alignments/{sample}.sorted.bam",
     output:
-        "alignments/{sample}.fraglengths.txt"
+        "alignments/{sample}.fraglengths.txt",
     log:
-        "logs/fragment_size/{sample}.log"
+        "logs/fragment_size/{sample}.log",
     conda:
         "envs/samtools.yaml"
     shell:
@@ -227,38 +248,52 @@ rule fragment_size:
         samtools view -F 0x04 {input} | awk -F"\\t" 'function abs(x){{return ((x < 0.0) ? -x : x)}} {{print abs($9)}}' | sort | uniq -c | awk -v OFS="\\t" '{{print $2, $1/2}}' > {output} 
         """
 
+
 rule viz_fragment_size:
     input:
-        expand("alignments/{sample}.fraglengths.txt", sample=SAMPLES)
+        expand("alignments/{sample}.fraglengths.txt", sample=SAMPLES),
     output:
-        report("stats/fragments.pdf", caption="report/fragments.rst")
+        report("stats/fragments.pdf", caption="report/fragments.rst"),
     log:
-        "logs/viz_fragment_size/plot.log"
+        "logs/viz_fragment_size/plot.log",
     conda:
         "envs/R.yaml"
     script:
         "scripts/viz_fragment_size.R"
 
-# we filter all reads overlapping the blacklist, remove non-primary and sex 
-# chromosomes and remove low-quality reads to create the bedgraph file which 
+
+# we filter all reads overlapping the blacklist, remove non-primary and sex
+# chromosomes and remove low-quality reads to create the bedgraph file which
 # is given to the peak caller
 rule bam_to_bed:
     input:
         fai=config["reference_fai"],
         blklist=config["blacklist"],
-        bai="dedupalignments/{sample}.sorted.bam.bai" if config["dedup"] else "alignments/{sample}.sorted.bam.bai",
-        bam="dedupalignments/{sample}.sorted.bam" if config["dedup"] else "alignments/{sample}.sorted.bam"
+        bai=(
+            "dedupalignments/{sample}.sorted.bam.bai"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.bam.bai"
+        ),
+        bam=(
+            "dedupalignments/{sample}.sorted.bam"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.bam"
+        ),
     output:
         bam=temp("{sample}.name.bam"),
-        qbam="dedupalignments/{sample}.sorted.qflt.bam" if config["dedup"] else "alignments/{sample}.sorted.qflt.bam",
+        qbam=(
+            "dedupalignments/{sample}.sorted.qflt.bam"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.qflt.bam"
+        ),
         bed="bedalignments/{sample}.bed",
         bedgraph="bedalignments/{sample}.bedgraph",
-        binbed="bedalignments/{sample}.bin.bed"
+        binbed="bedalignments/{sample}.bin.bed",
     log:
-        "logs/bam_to_bed/{sample}.log"
+        "logs/bam_to_bed/{sample}.log",
     params:
         chroms=config["chromosome_file"],
-        minq=config["minquality"]
+        minq=config["minquality"],
     conda:
         "envs/bedtools.yaml"
     shell:
@@ -285,71 +320,118 @@ rule bam_to_bed:
         |  sort -k1,1V -k2,2n  > {output.binbed}
         """
 
+
 rule assess_replicates:
     input:
-        expand("bedalignments/{sample}.bin.bed", sample=SAMPLES)
+        expand("bedalignments/{sample}.bin.bed", sample=SAMPLES),
     output:
-        report("stats/replicates.pdf", caption="report/replicates.rst")
+        report("stats/replicates.pdf", caption="report/replicates.rst"),
     log:
-        "logs/assess_replicates/plot.log"
+        "logs/assess_replicates/plot.log",
     conda:
         "envs/R.yaml"
     script:
         "scripts/viz_replicates.R"
 
+
 rule call_peaks:
     input:
         con=get_control if config["igg_control"] else [],
-        exp="bedalignments/{sample}.bedgraph"
+        exp="bedalignments/{sample}.bedgraph",
     output:
         "peaks/{sample}.peaks.stringent.bed",
     log:
-        "logs/call_peaks/{sample}.log"
+        "logs/call_peaks/{sample}.log",
     conda:
         "envs/seacr.yaml"
     params:
         prefix="peaks/{sample}.peaks",
-        has_igg=config["igg_control"]
+        has_igg=config["igg_control"],
     shell:
         """
-        if [ "{params.has_igg}" == true ]; then
+        if [ {params.has_igg} == True ]; then
             bash `which SEACR_1.3.sh` {input.exp} {input.con} norm stringent {params.prefix}
         else
             bash `which SEACR_1.3.sh` {input.exp} 0.01 norm stringent {params.prefix}
         fi
         """
 
+
+rule call_macs_peaks:
+    input:
+        con=get_control if config["igg_control"] else [],
+        exp=(
+            "dedupalignments/{sample}.sorted.bam"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.bam"
+        ),
+        expi=(
+            "dedupalignments/{sample}.sorted.bam.bai"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.bam.bai"
+        ),
+    output:
+        sbed="peaks/macs3/{sample}_summits.bed",
+        npeaks="peaks/macs3/{sample}_peaks.narrowPeak",
+        peaks="peaks/macs3/{sample}_peaks.xls",
+    log:
+        "logs/call_macs_peaks/{sample}.log",
+    conda:
+        "envs/macs.yaml"
+    params:
+        prefix="{sample}",
+        dir="peaks/macs3",
+        has_igg=config["igg_control"],
+    shell:
+        """
+        if [ {params.has_igg} == True ]; then
+           macs3 callpeak -t {input.exp} -c {input.con} -f BAM -g hs -n "{params.prefix}" --outdir {params.dir} -B -q 0.01
+        else
+           macs3 callpeak -t {input.exp} -f BAM -g hs -n "{params.prefix}" --outdir {params.dir} -B -q 0.01 --nolambda
+        fi
+        """
+
+
 rule assess_peaks:
     input:
         peaks=expand("peaks/{sample}.peaks.stringent.bed", sample=EXPERIMENT),
-        stats="stats/stats.txt"
+        stats="stats/stats.txt",
     output:
         peakN="stats/peaks_num.txt",
         peakR="stats/peaks_reproducibility.txt",
         peakF="stats/peaks_frip.txt",
-        fig="stats/peaks_fig.pdf"
+        fig="stats/peaks_fig.pdf",
     log:
-        "logs/assess_peaks/job.log"
+        "logs/assess_peaks/job.log",
     conda:
         "envs/R.yaml"
     params:
         samplesheet=config["samplesheet"],
-        subdir="dedupalignments" if config["dedup"] else "alignments"
+        subdir="dedupalignments" if config["dedup"] else "alignments",
     script:
         "scripts/assess_peaks.R"
 
+
 rule make_peak_heatmap:
     input:
-        bam="dedupalignments/{sample}.sorted.bam" if config["dedup"] else "alignments/{sample}.sorted.bam",
-        bai="dedupalignments/{sample}.sorted.bam.bai" if config["dedup"] else "alignments/{sample}.sorted.bam.bai",
-        peaks="peaks/{sample}.peaks.stringent.bed"
+        bam=(
+            "dedupalignments/{sample}.sorted.bam"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.bam"
+        ),
+        bai=(
+            "dedupalignments/{sample}.sorted.bam.bai"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.bam.bai"
+        ),
+        peaks="peaks/{sample}.peaks.stringent.bed",
     output:
         bw="alignments/{sample}_raw.bw",
         peaks="peaks/{sample}.peaks.summitRegion.bed",
         mat="peaks/{sample}.mat.gz",
-        heatmap="stats/{sample}.heatmap.png"
+        heatmap="stats/{sample}.heatmap.png",
     log:
-        "logs/get_coverage/{sample}.log"
+        "logs/get_coverage/{sample}.log",
     conda:
         "envs/deeptools.yaml"
     threads: 2
