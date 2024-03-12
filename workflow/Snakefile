@@ -56,14 +56,15 @@ rule all:
         "stats/stats.txt",
         "stats/fragments.pdf",
         "stats/replicates.pdf",
-        "stats/peaks_num.txt",
-        "stats/peaks_reproducibility.txt",
-        "stats/peaks_frip.txt",
-        "stats/peaks_fig.pdf",
-        expand("stats/{sample}.heatmap.png", sample=EXPERIMENT),
-        expand("peaks/macs3/{sample}_peaks.xls", sample=EXPERIMENT),
-        expand("peaks/macs3/{sample}_peaks.narrowPeak", sample=EXPERIMENT),
-        expand("peaks/macs3/{sample}_summits.bed", sample=EXPERIMENT)
+        "stats/seacr/peaks_num.txt",
+        "stats/seacr/peaks_reproducibility.txt",
+        "stats/seacr/peaks_frip.txt",
+        "stats/seacr/peaks_fig.pdf",
+        "stats/macs3/peaks_num.txt",
+        "stats/macs3/peaks_reproducibility.txt",
+        "stats/macs3/peaks_frip.txt",
+        "stats/macs3/peaks_fig.pdf",
+        expand("stats/seacr/{sample}.heatmap.png", sample=EXPERIMENT),
 
 
 rule check_quality:
@@ -334,18 +335,18 @@ rule assess_replicates:
         "scripts/viz_replicates.R"
 
 
-rule call_peaks:
+rule call_seacr_peaks:
     input:
         con=get_control if config["igg_control"] else [],
         exp="bedalignments/{sample}.bedgraph",
     output:
-        "peaks/{sample}.peaks.stringent.bed",
+        "peaks/seacr/{sample}.peaks.stringent.bed",
     log:
-        "logs/call_peaks/{sample}.log",
+        "logs/call_seacr_peaks/{sample}.log",
     conda:
         "envs/seacr.yaml"
     params:
-        prefix="peaks/{sample}.peaks",
+        prefix="peaks/seacr/{sample}.peaks",
         has_igg=config["igg_control"],
     shell:
         """
@@ -394,15 +395,15 @@ rule call_macs_peaks:
 
 rule assess_peaks:
     input:
-        peaks=expand("peaks/{sample}.peaks.stringent.bed", sample=EXPERIMENT),
+        peaks=expand("peaks/seacr/{sample}.peaks.stringent.bed", sample=EXPERIMENT),
         stats="stats/stats.txt",
     output:
-        peakN="stats/peaks_num.txt",
-        peakR="stats/peaks_reproducibility.txt",
-        peakF="stats/peaks_frip.txt",
-        fig="stats/peaks_fig.pdf",
+        peakN="stats/seacr/peaks_num.txt",
+        peakR="stats/seacr/peaks_reproducibility.txt",
+        peakF="stats/seacr/peaks_frip.txt",
+        fig="stats/seacr/peaks_fig.pdf",
     log:
-        "logs/assess_peaks/job.log",
+        "logs/assess_seacr_peaks/job.log",
     conda:
         "envs/R.yaml"
     params:
@@ -410,6 +411,18 @@ rule assess_peaks:
         subdir="dedupalignments" if config["dedup"] else "alignments",
     script:
         "scripts/assess_peaks.R"
+
+
+use rule assess_peaks as assess_macs_peaks with:
+    input:
+        peaks=expand("peaks/macs3/{sample}_peaks.narrowPeak", sample=EXPERIMENT),
+    output:
+        peakN="stats/macs3/peaks_num.txt",
+        peakR="stats/macs3/peaks_reproducibility.txt",
+        peakF="stats/macs3/peaks_frip.txt",
+        fig="stats/macs3/peaks_fig.pdf",
+    log:
+        "logs/assess_macs_peaks/job.log",
 
 
 rule make_peak_heatmap:
@@ -424,12 +437,12 @@ rule make_peak_heatmap:
             if config["dedup"]
             else "alignments/{sample}.sorted.bam.bai"
         ),
-        peaks="peaks/{sample}.peaks.stringent.bed",
+        peaks="peaks/seacr/{sample}.peaks.stringent.bed",
     output:
         bw="alignments/{sample}_raw.bw",
-        peaks="peaks/{sample}.peaks.summitRegion.bed",
-        mat="peaks/{sample}.mat.gz",
-        heatmap="stats/{sample}.heatmap.png",
+        peaks="peaks/seacr/{sample}.peaks.summitRegion.bed",
+        mat="peaks/seacr/{sample}.mat.gz",
+        heatmap="stats/seacr/{sample}.heatmap.png",
     log:
         "logs/get_coverage/{sample}.log",
     conda:
