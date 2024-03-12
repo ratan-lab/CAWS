@@ -6,25 +6,34 @@ library(viridis)
 library(chromVAR)
 library(ggpubr)
 
-samplesheet <- read_tsv(snakemake@params[["samplesheet"]])
-stats <- read_tsv(snakemake@input[["stats"]])
-folder <- snakemake@params[["subdir"]]
+samplesheet <- read_tsv(as.character(snakemake@params[["samplesheet"]]))
+stats <- read_tsv(as.character(snakemake@input[["stats"]]))
+folder <- as.character(snakemake@params[["subdir"]])
+method <- as.character(snakemake@params[["method"]])
+
+suffix <- NA
+if (method == "SEACR") {
+    suffix <- ".peaks.stringent.bed"
+} else if (method == "MACS") {
+    suffix <- "_peaks.narrowPeak"
+}
+stopifnot(is.na(suffix) == FALSE)
 
 peakN = tibble()
 peakW = tibble()
 peakO = tibble()
 peakF = tibble()
 
-for (absname in snakemake@input[["peaks"]]) {
-    filename = str_split(absname, "/")[[1]][2]
-    sample = str_split(filename, ".peaks.stringent.bed")[[1]][1]
+for (absname in as.character(snakemake@input[["peaks"]])) {
+    filename = str_split(absname, "/")[[1]][3]
+    sample = str_split(filename, suffix)[[1]][1]
     peakInfo = read.table(absname, header = FALSE, fill = TRUE)  %>% mutate(width = abs(V3-V2))
     peakN = tibble(peakN=nrow(peakInfo), sampleID=sample) %>% bind_rows(peakN)
     peakW = tibble(width=peakInfo$width, sampleID=sample) %>% bind_rows(peakW)
 }
 
 df <- left_join(peakN, samplesheet) %>% select(sampleID, condition, peakN)
-df %>% write_tsv(snakemake@output[["peakN"]])
+df %>% write_tsv(as.character(snakemake@output[["peakN"]]))
 figA <- df %>% 
         ggplot(aes(x = condition, y = peakN, fill = condition)) +
         geom_boxplot() +
@@ -48,15 +57,15 @@ figB = df %>%
         xlab("") +
         theme(axis.text.x = element_text(angle = 45))
 
-for (absname1 in snakemake@input[["peaks"]]) {
-    for (absname2 in snakemake@input[["peaks"]]) {
+for (absname1 in as.character(snakemake@input[["peaks"]])) {
+    for (absname2 in as.character(snakemake@input[["peaks"]])) {
         if (absname1 == absname2) next
 
-        filename1 = str_split(absname1, "/")[[1]][2]
-        filename2 = str_split(absname2, "/")[[1]][2]
+        filename1 = str_split(absname1, "/")[[1]][3]
+        filename2 = str_split(absname2, "/")[[1]][3]
 
-        sample1 = str_split(filename1, ".peaks.stringent.bed")[[1]][1]
-        sample2 = str_split(filename2, ".peaks.stringent.bed")[[1]][1]
+        sample1 = str_split(filename1, suffix)[[1]][1]
+        sample2 = str_split(filename2, suffix)[[1]][1]
 
         peakInfo1 = read.table(absname1, header = FALSE, fill = TRUE)  
         peakInfo2 = read.table(absname2, header = FALSE, fill = TRUE)  
@@ -83,7 +92,7 @@ df <- left_join(peakO, samplesheet, by=c("sample1"="sampleID")) %>%
       select(sample1, condition, peakN, overlap, peakReprodRate) %>%
       dplyr::rename("sampleID"="sample1") %>%
       dplyr::rename("peakReprodNum"="overlap")
-df %>% write_tsv(snakemake@output[["peakR"]])
+df %>% write_tsv(as.character(snakemake@output[["peakR"]]))
 figC <- df %>% 
         ggplot(aes(x=sampleID, y=peakReprodRate, fill=condition, label=peakReprodRate)) +
         geom_bar(stat = "identity") +
@@ -96,9 +105,9 @@ figC <- df %>%
         theme(axis.text.x = element_text(angle = 45))
 
 # FRiPs
-for (absname in snakemake@input[["peaks"]]) {
-    filename = str_split(absname, "/")[[1]][2]
-    sample = str_split(filename, ".peaks.stringent.bed")[[1]][1]
+for (absname in as.character(snakemake@input[["peaks"]])) {
+    filename = str_split(absname, "/")[[1]][3]
+    sample = str_split(filename, suffix)[[1]][1]
     
     peakRes = read.table(absname, header = FALSE, fill = TRUE)
     peak.gr = GRanges(seqnames = peakRes$V1, IRanges(start = peakRes$V2, end = peakRes$V3), strand = "*")
@@ -113,7 +122,7 @@ df <- left_join(peakF, samplesheet) %>%
       left_join(stats, by=c("sampleID"="Sample")) %>%
       select(sampleID, condition, inPeakN, MappedFragNum) %>%
       mutate(FRiP = round(inPeakN * 100.0 /MappedFragNum, 2))
-df %>% write_tsv(snakemake@output[["peakF"]])
+df %>% write_tsv(as.character(snakemake@output[["peakF"]]))
 figD <- df %>% 
         ggplot(aes(x=condition, y=FRiP, fill=condition, label=FRiP)) +
         geom_boxplot() +
@@ -125,7 +134,7 @@ figD <- df %>%
         xlab("") +
         theme(axis.text.x = element_text(angle = 45))
 
-pdf(snakemake@output[["fig"]], width=14, height=14)
+pdf(as.character(snakemake@output[["fig"]]), width=14, height=14)
 ggarrange(figA, figB, figC, figD, ncol = 2, nrow=2, common.legend = TRUE, legend="bottom")
 dev.off()
 

@@ -409,6 +409,7 @@ rule assess_peaks:
     params:
         samplesheet=config["samplesheet"],
         subdir="dedupalignments" if config["dedup"] else "alignments",
+        method="SEACR"
     script:
         "scripts/assess_peaks.R"
 
@@ -416,6 +417,7 @@ rule assess_peaks:
 use rule assess_peaks as assess_macs_peaks with:
     input:
         peaks=expand("peaks/macs3/{sample}_peaks.narrowPeak", sample=EXPERIMENT),
+        stats="stats/stats.txt",
     output:
         peakN="stats/macs3/peaks_num.txt",
         peakR="stats/macs3/peaks_reproducibility.txt",
@@ -423,6 +425,10 @@ use rule assess_peaks as assess_macs_peaks with:
         fig="stats/macs3/peaks_fig.pdf",
     log:
         "logs/assess_macs_peaks/job.log",
+    params:
+        samplesheet=config["samplesheet"],
+        subdir="dedupalignments" if config["dedup"] else "alignments",
+        method="MACS"
 
 
 rule make_peak_heatmap:
