@@ -18,7 +18,7 @@ samplesheet = pd.read_csv(
     dtype={
         "sampleID": str,
         "condition": str,
-        "replicate": str,
+        "group": str,
         "read1": str,
         "read2": str,
     },
