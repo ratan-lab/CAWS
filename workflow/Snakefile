@@ -351,12 +351,14 @@ rule call_seacr_peaks:
     shell:
         """
         if [ {params.has_igg} == True ]; then
-            bash `which SEACR_1.3.sh` {input.exp} {input.con} norm stringent {params.prefix}
+            bash `which SEACR_1.3.sh` {input.exp} {input.con} norm stringent {params.prefix} || true
         else
-            bash `which SEACR_1.3.sh` {input.exp} 0.01 norm stringent {params.prefix}
+            bash `which SEACR_1.3.sh` {input.exp} 0.01 norm stringent {params.prefix} || true
+        fi
+        if [ ! -f {output} ]; then
+            touch {output}
         fi
         """
-
 
 rule call_macs_peaks:
     input:
@@ -374,7 +376,7 @@ rule call_macs_peaks:
     output:
         sbed="peaks/macs3/{sample}_summits.bed",
         npeaks="peaks/macs3/{sample}_peaks.narrowPeak",
-        peaks="peaks/macs3/{sample}_peaks.xls",
+        peaks="peaks/macs3/{sample}_peaks.xls"
     log:
         "logs/call_macs_peaks/{sample}.log",
     conda:
@@ -386,9 +388,14 @@ rule call_macs_peaks:
     shell:
         """
         if [ {params.has_igg} == True ]; then
-           macs3 callpeak -t {input.exp} -c {input.con} -f BAM -g hs -n "{params.prefix}" --outdir {params.dir} -B -q 0.01
+           macs3 callpeak -t {input.exp} -c {input.con} -f BAM -g hs -n "{params.prefix}" --outdir {params.dir} -B -q 0.01 || true
         else
-           macs3 callpeak -t {input.exp} -f BAM -g hs -n "{params.prefix}" --outdir {params.dir} -B -q 0.01 --nolambda
+           macs3 callpeak -t {input.exp} -f BAM -g hs -n "{params.prefix}" --outdir {params.dir} -B -q 0.01 --nolambda || true
+        fi
+        if [ ! -f {output.npeaks} ]; then 
+            touch {output.sbed}
+            touch {output.npeaks}
+            touch {output.peaks}
         fi
         """
 
@@ -458,17 +465,23 @@ rule make_peak_heatmap:
         """
         bamCoverage -b {input.bam} -o {output.bw}
 
-        awk '{{split($6, summit, ":"); split(summit[2], region, "-"); print summit[1]"\t"region[1]"\t"region[2]}}' {input.peaks} > {output.peaks} 
+        if [ -s {input.peaks} ]; then 
+            awk '{{split($6, summit, ":"); split(summit[2], region, "-"); print summit[1]"\t"region[1]"\t"region[2]}}' {input.peaks} > {output.peaks} 
 
-        computeMatrix reference-point \
+            computeMatrix reference-point \
               -S {output.bw} \
               -R {output.peaks} \
               --skipZeros \
               -o {output.mat} -p {threads} -a 3000 -b 3000 \
               --referencePoint center
 
-        plotHeatmap -m {output.mat} -out {output.heatmap} --sortUsing sum \
+            plotHeatmap -m {output.mat} -out {output.heatmap} --sortUsing sum \
             --startLabel "Peak Start" --endLabel "Peak End" \
             --xAxisLabel "" \
             --regionsLabel "Peaks" --samplesLabel "{wildcards.sample}"
+        else
+            touch {output.peaks}
+            touch {output.mat}
+            touch {output.heatmap} 
+        fi
         """

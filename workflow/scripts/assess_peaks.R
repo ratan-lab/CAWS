@@ -25,6 +25,7 @@ peakO = tibble()
 peakF = tibble()
 
 for (absname in as.character(snakemake@input[["peaks"]])) {
+    if (file.size(absname) == 0L) next
     filename = str_split(absname, "/")[[1]][3]
     sample = str_split(filename, suffix)[[1]][1]
     peakInfo = read.table(absname, header = FALSE, fill = TRUE)  %>% mutate(width = abs(V3-V2))
@@ -58,8 +59,10 @@ figB = df %>%
         theme(axis.text.x = element_text(angle = 45))
 
 for (absname1 in as.character(snakemake@input[["peaks"]])) {
+    if (file.size(absname1) == 0L) next
     for (absname2 in as.character(snakemake@input[["peaks"]])) {
         if (absname1 == absname2) next
+        if (file.size(absname2) == 0L) next
 
         filename1 = str_split(absname1, "/")[[1]][3]
         filename2 = str_split(absname2, "/")[[1]][3]
@@ -106,6 +109,7 @@ figC <- df %>%
 
 # FRiPs
 for (absname in as.character(snakemake@input[["peaks"]])) {
+    if (file.size(absname) == 0L) next
     filename = str_split(absname, "/")[[1]][3]
     sample = str_split(filename, suffix)[[1]][1]
     
