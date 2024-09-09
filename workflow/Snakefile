@@ -29,9 +29,6 @@ samplesheet = pd.read_csv(
 # TODO: check that each 'group' in my samplesheet has one sample with
 # 'condition' as  "Control" if IgG control is included
 
-# implement get_control so that the correct replicate is assigned when using
-# IgG controls
-
 # TODO: check that read files exist and can be read
 
 # TODO: only one stats file should be generated. A left join of the two stats
@@ -337,7 +334,7 @@ rule assess_replicates:
 
 rule call_seacr_peaks:
     input:
-        con=get_control if config["igg_control"] else [],
+        con=get_bedg_control if config["igg_control"] else [],
         exp="bedalignments/{sample}.bedgraph",
     output:
         "peaks/seacr/{sample}.peaks.stringent.bed",
@@ -362,7 +359,7 @@ rule call_seacr_peaks:
 
 rule call_macs_peaks:
     input:
-        con=get_control if config["igg_control"] else [],
+        con=get_bam_control if config["igg_control"] else [],
         exp=(
             "dedupalignments/{sample}.sorted.bam"
             if config["dedup"]
@@ -388,9 +385,9 @@ rule call_macs_peaks:
     shell:
         """
         if [ {params.has_igg} == True ]; then
-           macs3 callpeak -t {input.exp} -c {input.con} -f BAM -g hs -n "{params.prefix}" --outdir {params.dir} -B -q 0.01 || true
+           macs3 callpeak -t {input.exp} -c {input.con} -f BAMPE -g hs -n "{params.prefix}" --outdir {params.dir} -B -q 0.01 || true
         else
-           macs3 callpeak -t {input.exp} -f BAM -g hs -n "{params.prefix}" --outdir {params.dir} -B -q 0.01 --nolambda || true
+           macs3 callpeak -t {input.exp} -f BAMPE -g hs -n "{params.prefix}" --outdir {params.dir} -B -q 0.01 --nolambda || true
         fi
         if [ ! -f {output.npeaks} ]; then 
             touch {output.sbed}
