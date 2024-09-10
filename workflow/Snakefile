@@ -1,16 +1,15 @@
 from snakemake.utils import min_version
 import os
+import numpy as np
+import pandas as pd
 
 ##### set minimum snakemake version #####
 min_version("6.0.0")
 
-
 ##### load rules ##########
 include: "rules/common.smk"
 
-
 workdir: config["outdir"]
-
 
 samplesheet = pd.read_csv(
     config["samplesheet"],
@@ -24,12 +23,11 @@ samplesheet = pd.read_csv(
     },
 ).set_index("sampleID")
 
-# TODO: check the sample names in 'sampleID' are unique
+# check the sample names are unique
+assert len(np.unique(samplesheet.index.tolist())) == len(samplesheet.index.tolist()), "sampleIDs in the samplesheet are not unique"
 
 # TODO: check that each 'group' in my samplesheet has one sample with
 # 'condition' as  "Control" if IgG control is included
-
-# TODO: check that read files exist and can be read
 
 # TODO: only one stats file should be generated. A left join of the two stats
 # files I generate currently should suffice.
@@ -44,7 +42,6 @@ if not os.path.exists(dir):
 SAMPLES = samplesheet.index.tolist()
 EXPERIMENT = samplesheet[samplesheet["condition"] != "Control"].index.tolist()
 CONTROL = samplesheet[samplesheet["condition"] == "Control"].index.tolist()
-
 
 rule all:
     input:
