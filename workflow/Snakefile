@@ -1,5 +1,6 @@
 from snakemake.utils import min_version
 import os
+import shutil
 import numpy as np
 import pandas as pd
 
@@ -35,9 +36,9 @@ assert len(np.unique(samplesheet.index.tolist())) == len(samplesheet.index.tolis
 # TODO: Several of the output files are not needed at the end. Use temp to
 # remove them after they are not needed
 
-dir = config["outdir"] + "/logs"
-if not os.path.exists(dir):
-    os.makedirs(dir)
+logdir = config["outdir"] + "/logs"
+if not os.path.exists(logdir):
+    os.makedirs(logdir)
 
 SAMPLES = samplesheet.index.tolist()
 EXPERIMENT = samplesheet[samplesheet["condition"] != "Control"].index.tolist()
@@ -205,6 +206,7 @@ rule find_ecoli_reads:
         "logs/find_ecoli_reads/{sample}.log",
     conda:
         "envs/bowtie.yaml"
+    threads: 4
     params:
         ref=config["ecoli_bt2_idx"],
     shell:
@@ -281,6 +283,11 @@ rule bam_to_bed:
             if config["dedup"]
             else "alignments/{sample}.sorted.qflt.bam"
         ),
+        qbai=(
+            "dedupalignments/{sample}.sorted.qflt.bam.bai"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.qflt.bam.bai"
+        ),
         bed="bedalignments/{sample}.bed",
         bedgraph="bedalignments/{sample}.bedgraph",
         binbed="bedalignments/{sample}.bin.bed",
@@ -293,16 +300,19 @@ rule bam_to_bed:
         "envs/bedtools.yaml"
     shell:
         """
-        samtools view -q {params.minq} -b -o {output.qbam} {input.bam} 
+        samtools view -h -q {params.minq} -f 1 -F 3852 {input.bam} $(tr '\\n' ' ' < {params.chroms}) \
+        | awk -F "\\t" '/^@/ {{print; next}} ($7=="=" && $9 <= 1000 && $9 >= -1000) {{print}}' \
+        | samtools view -b \
+        | bedtools intersect -abam - -b {input.blklist} -v \
+        > {output.qbam}
+
+        samtools index {output.qbam}
+
         samtools sort -@ {threads} -n -O BAM -o {output.bam} {output.qbam} 
 
         bedtools bamtobed -i {output.bam} -bedpe \
-        | awk '$1 != "." && $4 != "."' \
-        | awk '$1==$4 && $6-$2 < 1000' \
         | cut -f 1,2,6 \
         | sort -k1,1 -k2,2n -k3,3n  \
-        | grep -w -f {params.chroms} \
-        | bedtools intersect -a stdin -b {input.blklist} -v \
         > {output.bed}
 
         bedtools genomecov -bg -i {output.bed} \
@@ -315,7 +325,6 @@ rule bam_to_bed:
         |  sort -k1,1V -k2,2n  > {output.binbed}
         """
 
-
 rule assess_replicates:
     input:
         expand("bedalignments/{sample}.bin.bed", sample=SAMPLES),
@@ -327,7 +336,6 @@ rule assess_replicates:
         "envs/R.yaml"
     script:
         "scripts/viz_replicates.R"
-
 
 rule call_seacr_peaks:
     input:
@@ -358,14 +366,14 @@ rule call_macs_peaks:
     input:
         con=get_bam_control if config["igg_control"] else [],
         exp=(
-            "dedupalignments/{sample}.sorted.bam"
+            "dedupalignments/{sample}.sorted.qflt.bam"
             if config["dedup"]
-            else "alignments/{sample}.sorted.bam"
+            else "alignments/{sample}.sorted.qflt.bam"
         ),
         expi=(
-            "dedupalignments/{sample}.sorted.bam.bai"
+            "dedupalignments/{sample}.sorted.qflt.bam.bai"
             if config["dedup"]
-            else "alignments/{sample}.sorted.bam.bai"
+            else "alignments/{sample}.sorted.qflt.bam.bai"
         ),
     output:
         sbed="peaks/macs3/{sample}_summits.bed",
@@ -384,7 +392,7 @@ rule call_macs_peaks:
         if [ {params.has_igg} == True ]; then
            macs3 callpeak -t {input.exp} -c {input.con} -f BAMPE -g hs -n "{params.prefix}" --outdir {params.dir} -B -q 0.01 || true
         else
-           macs3 callpeak -t {input.exp} -f BAMPE -g hs -n "{params.prefix}" --outdir {params.dir} -B -q 0.01 --nolambda || true
+           macs3 callpeak -t {input.exp} -f BAMPE -g hs -n "{params.prefix}" --outdir {params.dir} -B -q 0.001 --nolambda || true
         fi
         if [ ! -f {output.npeaks} ]; then 
             touch {output.sbed}
@@ -392,7 +400,6 @@ rule call_macs_peaks:
             touch {output.peaks}
         fi
         """
-
 
 rule assess_peaks:
     input:
@@ -414,7 +421,6 @@ rule assess_peaks:
     script:
         "scripts/assess_peaks.R"
 
-
 use rule assess_peaks as assess_macs_peaks with:
     input:
         peaks=expand("peaks/macs3/{sample}_peaks.narrowPeak", sample=EXPERIMENT),
@@ -430,7 +436,6 @@ use rule assess_peaks as assess_macs_peaks with:
         samplesheet=config["samplesheet"],
         subdir="dedupalignments" if config["dedup"] else "alignments",
         method="MACS"
-
 
 rule make_peak_heatmap:
     input:
@@ -479,3 +484,7 @@ rule make_peak_heatmap:
             touch {output.heatmap} 
         fi
         """
+
+onsuccess:
+    shutil.rmtree(os.path.join(config["outdir"], "alignments"), ignore_errors=True)
+
