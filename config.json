@@ -7,10 +7,16 @@
     "blacklist": "",
     "ecoli_reference": "",
     "ecoli_bt2_idx": "",
-    "trim_adapters": ,
+    "trim_adapters": true,
     "igg_control": false,
     "mt_chrom": "",
-    "dedup": ,
+    "dedup": true,
     "minquality": 3,
+    "fragment_min": 10,
+    "fragment_max": 700,
+    "seacr_qvalue": 0.01,
+    "macs3_qvalue_with_control": 0.01,
+    "macs3_qvalue_no_control": 0.001,
+    "heatmap_window": 3000,
     "outdir": ""
 }

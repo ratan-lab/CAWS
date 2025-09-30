@@ -17,10 +17,16 @@ Here are the details of the various entries to be filled:
 - ecoli_reference: Absolute path of the E.Coli reference genome
 - ecoli_bt2_idx: Absolute path for the bowtie2 index of the E.Coli genome
 - trim_adapters: true/false. Should adapters be trimmed? We use trim_galore which identifies the adapters before trimming them
-- igg_control: Is there an IgG control to be used? Currently this is set to false, and code for 'true' is not implemented
+- igg_control: true/false. Should IgG controls be used for peak calling? When true, control samples (marked as "Control" in the condition column) are used as background for both SEACR and MACS3. Controls are matched to experiments via the 'group' field. The pipeline validates that each group has exactly one Control sample and at least one experimental sample when this option is enabled
 - mt_chrom: The name of the mitochondrial genome in the reference. Reads aligning to the mtDNA are counted in stats, and removed prior to peak calls
 - dedup: true/false. Should the PCR duplicates be removed prior to peak calls?
 - minquality: What is the minimum mapping quality we should include in the counts for calling peaks
+- fragment_min: Minimum fragment size for alignment (default: 10)
+- fragment_max: Maximum fragment size for alignment (default: 700)
+- seacr_qvalue: Statistical threshold for SEACR peak calling when no control is used (default: 0.01)
+- macs3_qvalue_with_control: Q-value threshold for MACS3 peak calling with IgG control (default: 0.01)
+- macs3_qvalue_no_control: Q-value threshold for MACS3 peak calling without control (default: 0.001)
+- heatmap_window: Window size (bp) around peak centers for heatmap generation (default: 3000)
 - outdir: Absolute path of the output directory of the analysis
 
 Example config file
@@ -40,6 +46,12 @@ Example config file
     "mt_chrom": "chrM",
     "dedup": true,
     "minquality": 3,
+    "fragment_min": 10,
+    "fragment_max": 700,
+    "seacr_qvalue": 0.01,
+    "macs3_qvalue_with_control": 0.01,
+    "macs3_qvalue_no_control": 0.001,
+    "heatmap_window": 3000,
     "outdir": "/nv/vol169/cphg_ratan/ar7jq/CAWS/20230324"
 }
 ```
