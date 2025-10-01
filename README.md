@@ -27,6 +27,7 @@ Here are the details of the various entries to be filled:
 - macs3_qvalue_with_control: Q-value threshold for MACS3 peak calling with IgG control (default: 0.01)
 - macs3_qvalue_no_control: Q-value threshold for MACS3 peak calling without control (default: 0.001)
 - heatmap_window: Window size (bp) around peak centers for heatmap generation (default: 3000)
+- gtf_file: Absolute path to GTF annotation file for TSS enrichment analysis (optional - leave empty to skip)
 - outdir: Absolute path of the output directory of the analysis
 
 Example config file
@@ -52,6 +53,7 @@ Example config file
     "macs3_qvalue_with_control": 0.01,
     "macs3_qvalue_no_control": 0.001,
     "heatmap_window": 3000,
+    "gtf_file": "",
     "outdir": "/nv/vol169/cphg_ratan/ar7jq/CAWS/20230324"
 }
 ```
@@ -75,5 +77,135 @@ snakemake \
     --conda-prefix /nv/vol169/cphg_ratan/ar7jq/CAWS/environment \
     --verbose \
     --cluster-config clusterconfig.json \
-    --cluster " sbatch --partition {cluster.queue} -J {cluster.name} --cpus-per-task {cluster.nCPUs} --mem {cluster.memory} --time {cluster.maxTime} -o \"{cluster.output}\" -e \"{cluster.error}\" --mail-type=None --parsable -A {cluster.account} " 
+    --cluster " sbatch --partition {cluster.queue} -J {cluster.name} --cpus-per-task {cluster.nCPUs} --mem {cluster.memory} --time {cluster.maxTime} -o \"{cluster.output}\" -e \"{cluster.error}\" --mail-type=None --parsable -A {cluster.account} "
 ```
+
+## Features
+
+### Core Pipeline
+- Quality control with FastQC
+- Adapter trimming with trim_galore
+- Alignment with Bowtie2
+- Duplicate removal with Picard
+- Peak calling with SEACR and MACS3
+- Contamination detection (mtDNA, E.coli)
+- Fragment size analysis
+- Replicate correlation analysis
+- Peak reproducibility assessment
+- FRiP score calculation
+
+### Enhanced Analysis & QC (v2.0)
+- **TSS enrichment calculation** - Signal enrichment around transcription start sites
+- **Peak width distribution analysis** - Detailed peak characteristics and categorization
+- **Interactive HTML reports** - Comprehensive dashboard with plotly visualizations
+- **Peak quality metrics** - Narrow vs broad peak classification
+- **Method comparison** - Side-by-side SEACR vs MACS3 analysis
+
+## Output Structure
+
+```
+output_directory/
+├── qc/                   # FastQC quality control reports
+├── trimmed/              # Adapter-trimmed reads (if enabled)
+├── alignments/           # Alignment files and temporary data
+├── dedupalignments/      # Deduplicated alignments (if enabled)
+├── bedalignments/        # Processed BED files for peak calling
+├── peaks/                # Peak calling results
+│   ├── seacr/           # SEACR peak files
+│   └── macs3/           # MACS3 peak files
+├── stats/                # Summary statistics and plots
+│   ├── seacr/           # SEACR-specific analysis
+│   └── macs3/           # MACS3-specific analysis
+├── reports/              # Interactive HTML reports
+├── annotations/          # TSS annotations (if GTF provided)
+└── logs/                 # Log files
+```
+
+## Key Output Files
+
+### Summary Reports
+- `reports/cutntag_analysis_report.html` - **Interactive HTML dashboard** with all analysis results
+- `stats/stats.txt` - Alignment and QC statistics
+- `stats/peaks_consolidated.txt` - Combined peak analysis results with width metrics
+
+### Static Visualizations
+- `stats/fragments.pdf` - Fragment size distribution
+- `stats/replicates.pdf` - Replicate correlation analysis
+- `stats/seacr/peaks_fig.pdf` - SEACR peak analysis plots (multi-page with width analysis)
+- `stats/macs3/peaks_fig.pdf` - MACS3 peak analysis plots (multi-page with width analysis)
+- `stats/seacr/peaks_width_analysis.pdf` - Dedicated SEACR peak width analysis
+- `stats/macs3/peaks_width_analysis.pdf` - Dedicated MACS3 peak width analysis
+
+### Enhanced Analysis Files
+- `stats/tss_enrichment.txt` - TSS enrichment scores (if GTF provided)
+- `stats/tss_enrichment.pdf` - TSS enrichment profile plots (if GTF provided)
+- `stats/seacr/peaks_width_stats.txt` - Detailed SEACR peak width statistics
+- `stats/macs3/peaks_width_stats.txt` - Detailed MACS3 peak width statistics
+- `annotations/tss.bed` - Extracted transcription start sites (if GTF provided)
+
+## Interactive HTML Report
+
+The pipeline generates a comprehensive interactive HTML dashboard (`reports/cutntag_analysis_report.html`) featuring:
+
+### Multi-page Dashboard
+- **Overview**: Sample summaries, alignment stats, peak count/FRiP comparisons
+- **Peak Analysis**: Interactive peak width distributions, statistics tables, categorization
+- **Quality Control**: Reproducibility analysis, fragment distributions, TSS enrichment
+- **Method Comparison**: SEACR vs MACS3 correlation plots and comparisons
+
+### Interactive Features
+- **Plotly integration**: Hover tooltips, zoom, pan functionality
+- **Responsive tables**: Sortable, searchable data tables
+- **Conditional content**: TSS analysis shown only when GTF file provided
+- **Modern design**: Professional dashboard layout
+
+## TSS Enrichment Analysis
+
+### Configuration
+To enable TSS enrichment analysis, provide a GTF file path in your config:
+
+```json
+{
+    "gtf_file": "/path/to/your/genes.gtf"
+}
+```
+
+### Analysis Features
+- Extracts transcription start sites from GTF annotations
+- Calculates signal enrichment around TSS (±2kb window)
+- Generates TSS enrichment profile plots
+- Computes enrichment scores (TSS signal vs flanking regions)
+- Integrates results into HTML dashboard
+
+### Output Files
+- `annotations/tss.bed` - Extracted TSS coordinates
+- `stats/tss_enrichment.txt` - Per-sample enrichment scores
+- `stats/tss_enrichment.pdf` - TSS profile visualization
+
+## Peak Width Analysis
+
+### Metrics Calculated
+- **Summary statistics**: median, mean, quartiles, min/max widths
+- **Peak categorization**:
+  - Narrow peaks: ≤500bp (indicate high specificity)
+  - Broad peaks: >2000bp (indicate open chromatin regions)
+- **Method comparison**: SEACR vs MACS3 peak characteristics
+
+### Visualizations
+- Peak width distribution histograms by condition
+- Peak category percentages (narrow vs broad)
+- Sample-level width statistics tables
+
+## Citation
+
+If you use this pipeline, please cite the relevant tools:
+
+- Snakemake
+- Bowtie2
+- SEACR
+- MACS3
+- FastQC
+- trim_galore
+- Picard
+- deepTools (for TSS analysis)
+- R/ggplot2, plotly, flexdashboard (for visualizations)

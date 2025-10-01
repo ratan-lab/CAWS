@@ -57,6 +57,8 @@ rule all:
         "stats/seacr/peaks_fig.pdf",
         "stats/macs3/peaks_fig.pdf",
         expand("stats/seacr/{sample}.heatmap.png", sample=EXPERIMENT),
+        "stats/tss_enrichment.txt" if config["gtf_file"] else [],
+        "reports/cutntag_analysis_report.html",
 
 
 rule check_quality:
@@ -406,7 +408,9 @@ rule assess_peaks:
         peakN="stats/seacr/peaks_num.txt",
         peakR="stats/seacr/peaks_reproducibility.txt",
         peakF="stats/seacr/peaks_frip.txt",
+        peakW="stats/seacr/peaks_width_stats.txt",
         fig="stats/seacr/peaks_fig.pdf",
+        figW="stats/seacr/peaks_width_analysis.pdf",
     log:
         "logs/assess_seacr_peaks/job.log",
     conda:
@@ -426,7 +430,9 @@ use rule assess_peaks as assess_macs_peaks with:
         peakN="stats/macs3/peaks_num.txt",
         peakR="stats/macs3/peaks_reproducibility.txt",
         peakF="stats/macs3/peaks_frip.txt",
+        peakW="stats/macs3/peaks_width_stats.txt",
         fig="stats/macs3/peaks_fig.pdf",
+        figW="stats/macs3/peaks_width_analysis.pdf",
     log:
         "logs/assess_macs_peaks/job.log",
     params:
@@ -439,9 +445,11 @@ rule consolidate_stats:
         seacr_num="stats/seacr/peaks_num.txt",
         seacr_reprod="stats/seacr/peaks_reproducibility.txt",
         seacr_frip="stats/seacr/peaks_frip.txt",
+        seacr_width="stats/seacr/peaks_width_stats.txt",
         macs3_num="stats/macs3/peaks_num.txt",
         macs3_reprod="stats/macs3/peaks_reproducibility.txt",
         macs3_frip="stats/macs3/peaks_frip.txt",
+        macs3_width="stats/macs3/peaks_width_stats.txt",
     output:
         consolidated="stats/peaks_consolidated.txt",
     log:
@@ -497,6 +505,86 @@ rule make_peak_heatmap:
             touch {output.mat}
             touch {output.heatmap} 
         fi
+        """
+
+if config["gtf_file"]:
+    rule extract_tss:
+        input:
+            gtf=config["gtf_file"],
+        output:
+            tss="annotations/tss.bed",
+        log:
+            "logs/extract_tss/job.log",
+        conda:
+            "envs/bedtools.yaml"
+        shell:
+            """
+            mkdir -p annotations
+            awk '$3=="gene" && $7=="+" {{print $1"\\t"($4-1)"\\t"$4"\\t"$10"\\t"$6"\\t"$7}} $3=="gene" && $7=="-" {{print $1"\\t"($5-1)"\\t"$5"\\t"$10"\\t"$6"\\t"$7}}' {input.gtf} | sed 's/[";]//g' > {output.tss}
+            """
+
+    rule calculate_tss_enrichment:
+        input:
+            tss="annotations/tss.bed",
+            bw=expand("alignments/{sample}_raw.bw", sample=SAMPLES),
+        output:
+            matrix=temp("stats/tss_matrix.gz"),
+            enrichment="stats/tss_enrichment.txt",
+            plot="stats/tss_enrichment.pdf",
+        log:
+            "logs/calculate_tss_enrichment/job.log",
+        conda:
+            "envs/deeptools.yaml"
+        threads: 4
+        shell:
+            """
+            computeMatrix reference-point \\
+                -S {input.bw} \\
+                -R {input.tss} \\
+                --referencePoint center \\
+                -a 2000 -b 2000 \\
+                --skipZeros \\
+                -o {output.matrix} \\
+                -p {threads}
+
+            plotProfile -m {output.matrix} \\
+                -out {output.plot} \\
+                --averageType mean \\
+                --plotTitle "TSS Enrichment Profile" \\
+                --yAxisLabel "Mean Coverage" \\
+                --xAxisLabel "Distance from TSS (bp)"
+
+            python3 workflow/scripts/calculate_tss_enrichment.py {output.matrix} {output.enrichment}
+            """
+
+rule generate_html_report:
+    input:
+        stats="stats/stats.txt",
+        consolidated="stats/peaks_consolidated.txt",
+        seacr_num="stats/seacr/peaks_num.txt",
+        seacr_reprod="stats/seacr/peaks_reproducibility.txt",
+        seacr_frip="stats/seacr/peaks_frip.txt",
+        seacr_width="stats/seacr/peaks_width_stats.txt",
+        macs3_num="stats/macs3/peaks_num.txt",
+        macs3_reprod="stats/macs3/peaks_reproducibility.txt",
+        macs3_frip="stats/macs3/peaks_frip.txt",
+        macs3_width="stats/macs3/peaks_width_stats.txt",
+        seacr_peaks=expand("peaks/seacr/{sample}.peaks.stringent.bed", sample=EXPERIMENT),
+        macs3_peaks=expand("peaks/macs3/{sample}_peaks.narrowPeak", sample=EXPERIMENT),
+        fragments=expand("alignments/{sample}.fraglengths.txt", sample=SAMPLES),
+        tss_enrichment="stats/tss_enrichment.txt" if config["gtf_file"] else [],
+    output:
+        html_report="reports/cutntag_analysis_report.html",
+    log:
+        "logs/generate_html_report/job.log",
+    conda:
+        "envs/R.yaml"
+    params:
+        samplesheet=config["samplesheet"],
+    shell:
+        """
+        mkdir -p reports
+        Rscript workflow/scripts/render_html_report.R
         """
 
 onsuccess:

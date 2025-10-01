@@ -47,7 +47,31 @@ figA <- df %>%
         theme(axis.text.x = element_text(angle = 45))
 
 df <- left_join(peakW, samplesheet) %>% select(sampleID, condition, width)
-figB = df %>% 
+
+# Calculate peak width statistics
+peakW_stats <- df %>%
+    group_by(sampleID, condition) %>%
+    summarise(
+        median_width = median(width, na.rm = TRUE),
+        mean_width = mean(width, na.rm = TRUE),
+        q25_width = quantile(width, 0.25, na.rm = TRUE),
+        q75_width = quantile(width, 0.75, na.rm = TRUE),
+        min_width = min(width, na.rm = TRUE),
+        max_width = max(width, na.rm = TRUE),
+        narrow_peaks = sum(width <= 500, na.rm = TRUE),
+        broad_peaks = sum(width > 2000, na.rm = TRUE),
+        total_peaks = n(),
+        .groups = 'drop'
+    ) %>%
+    mutate(
+        pct_narrow = round(narrow_peaks * 100.0 / total_peaks, 2),
+        pct_broad = round(broad_peaks * 100.0 / total_peaks, 2)
+    )
+
+# Write peak width statistics
+write_tsv(peakW_stats, sub("peaks_num.txt", "peaks_width_stats.txt", as.character(snakemake@output[["peakN"]])))
+
+figB = df %>%
         ggplot(aes(x=sampleID, y=width, fill=condition)) +
         geom_violin() +
         scale_fill_viridis(discrete = TRUE, begin = 0.1, end = 0.55, option = "magma", alpha = 0.8) +
@@ -57,6 +81,35 @@ figB = df %>%
         ylab("Width of Peaks") +
         xlab("") +
         theme(axis.text.x = element_text(angle = 45))
+
+# Enhanced peak width distribution plot
+figB2 <- df %>%
+    ggplot(aes(x = width, fill = condition)) +
+    geom_histogram(bins = 50, alpha = 0.7, position = "identity") +
+    scale_fill_viridis(discrete = TRUE, begin = 0.1, end = 0.55, option = "magma", alpha = 0.8) +
+    scale_x_continuous(trans = "log10", breaks = c(100, 500, 1000, 5000, 10000)) +
+    facet_wrap(~condition, scales = "free_y") +
+    theme_bw(base_size = 14) +
+    xlab("Peak Width (bp)") +
+    ylab("Count") +
+    ggtitle("Peak Width Distribution by Condition")
+
+# Peak width category plot
+figB3 <- peakW_stats %>%
+    select(sampleID, condition, pct_narrow, pct_broad) %>%
+    pivot_longer(cols = c(pct_narrow, pct_broad), names_to = "category", values_to = "percentage") %>%
+    mutate(category = case_when(
+        category == "pct_narrow" ~ "Narrow (≤500bp)",
+        category == "pct_broad" ~ "Broad (>2000bp)"
+    )) %>%
+    ggplot(aes(x = sampleID, y = percentage, fill = category)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    scale_fill_viridis(discrete = TRUE, begin = 0.2, end = 0.8, option = "plasma") +
+    theme_bw(base_size = 14) +
+    ylab("Percentage of Peaks") +
+    xlab("") +
+    theme(axis.text.x = element_text(angle = 45)) +
+    labs(fill = "Peak Category")
 
 for (absname1 in as.character(snakemake@input[["peaks"]])) {
     if (file.size(absname1) == 0L) next
@@ -138,8 +191,20 @@ figD <- df %>%
         xlab("") +
         theme(axis.text.x = element_text(angle = 45))
 
-pdf(as.character(snakemake@output[["fig"]]), width=14, height=14)
+# Create multi-page PDF with enhanced peak width analysis
+pdf(as.character(snakemake@output[["fig"]]), width=16, height=20)
+
+# Page 1: Original 4-panel plot
 ggarrange(figA, figB, figC, figD, ncol = 2, nrow=2, common.legend = TRUE, legend="bottom")
+
+# Page 2: Enhanced peak width analysis
+ggarrange(figB2, figB3, ncol = 1, nrow=2, common.legend = FALSE, heights = c(1, 1))
+
+dev.off()
+
+# Also create separate peak width analysis PDF
+pdf(sub("peaks_fig.pdf", "peaks_width_analysis.pdf", as.character(snakemake@output[["fig"]])), width=14, height=10)
+ggarrange(figB2, figB3, ncol = 1, nrow=2, common.legend = FALSE, heights = c(1, 1))
 dev.off()
 
  
