@@ -520,7 +520,13 @@ if config["gtf_file"]:
         shell:
             """
             mkdir -p annotations
-            awk '$3=="gene" && $7=="+" {{print $1"\\t"($4-1)"\\t"$4"\\t"$10"\\t"$6"\\t"$7}} $3=="gene" && $7=="-" {{print $1"\\t"($5-1)"\\t"$5"\\t"$10"\\t"$6"\\t"$7}}' {input.gtf} | sed 's/[";]//g' > {output.tss}
+
+            # Handle both gzipped and regular GTF files
+            if [[ {input.gtf} == *.gz ]]; then
+                zcat {input.gtf} | awk '$3=="gene" && $7=="+" {{print $1"\\t"($4-1)"\\t"$4"\\t"$10"\\t"$6"\\t"$7}} $3=="gene" && $7=="-" {{print $1"\\t"($5-1)"\\t"$5"\\t"$10"\\t"$6"\\t"$7}}' | sed 's/[";]//g' > {output.tss}
+            else
+                awk '$3=="gene" && $7=="+" {{print $1"\\t"($4-1)"\\t"$4"\\t"$10"\\t"$6"\\t"$7}} $3=="gene" && $7=="-" {{print $1"\\t"($5-1)"\\t"$5"\\t"$10"\\t"$6"\\t"$7}}' {input.gtf} | sed 's/[";]//g' > {output.tss}
+            fi
             """
 
     rule calculate_tss_enrichment:

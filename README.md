@@ -170,6 +170,10 @@ To enable TSS enrichment analysis, provide a GTF file path in your config:
 }
 ```
 
+**Supported formats:**
+- Regular GTF files: `genes.gtf`
+- Gzipped GTF files: `genes.gtf.gz` (automatically detected and decompressed)
+
 ### Analysis Features
 - Extracts transcription start sites from GTF annotations
 - Calculates signal enrichment around TSS (±2kb window)
