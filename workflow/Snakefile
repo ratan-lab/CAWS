@@ -523,9 +523,9 @@ if config["gtf_file"]:
 
             # Handle both gzipped and regular GTF files
             if [[ {input.gtf} == *.gz ]]; then
-                zcat {input.gtf} | awk '$3=="gene" && $7=="+" && $0~/gene_biotype "protein_coding"/ {{print $1"\\t"($4-1)"\\t"$4"\\t"$10"\\t"$6"\\t"$7}} $3=="gene" && $7=="-" && $0~/gene_biotype "protein_coding"/ {{print $1"\\t"($5-1)"\\t"$5"\\t"$10"\\t"$6"\\t"$7}}' | sed 's/[";]//g' > {output.tss}
+                zcat {input.gtf} | awk '$3=="gene" && $7=="+" && $0~/gene_type "protein_coding"/ {{print $1"\\t"($4-1)"\\t"$4"\\t"$10"\\t"$6"\\t"$7}} $3=="gene" && $7=="-" && $0~/gene_type "protein_coding"/ {{print $1"\\t"($5-1)"\\t"$5"\\t"$10"\\t"$6"\\t"$7}}' | sed 's/[";]//g' > {output.tss}
             else
-                awk '$3=="gene" && $7=="+" && $0~/gene_biotype "protein_coding"/ {{print $1"\\t"($4-1)"\\t"$4"\\t"$10"\\t"$6"\\t"$7}} $3=="gene" && $7=="-" && $0~/gene_biotype "protein_coding"/ {{print $1"\\t"($5-1)"\\t"$5"\\t"$10"\\t"$6"\\t"$7}}' | sed 's/[";]//g' > {output.tss}
+                awk '$3=="gene" && $7=="+" && $0~/gene_type "protein_coding"/ {{print $1"\\t"($4-1)"\\t"$4"\\t"$10"\\t"$6"\\t"$7}} $3=="gene" && $7=="-" && $0~/gene_type "protein_coding"/ {{print $1"\\t"($5-1)"\\t"$5"\\t"$10"\\t"$6"\\t"$7}}' | sed 's/[";]//g' > {output.tss}
             fi
             """
 
