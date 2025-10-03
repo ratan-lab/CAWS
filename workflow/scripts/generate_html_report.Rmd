@@ -17,24 +17,39 @@ library(viridis)
 library(GenomicRanges)
 library(chromVAR)
 
-# Read input data
+# Read input data - use absolute paths based on Snakemake working directory
 samplesheet <- read_tsv(snakemake@params[["samplesheet"]])
-stats <- read_tsv(as.character(snakemake@input[["stats"]]))
-seacr_num <- read_tsv(as.character(snakemake@input[["seacr_num"]]))
-seacr_reprod <- read_tsv(as.character(snakemake@input[["seacr_reprod"]]))
-seacr_frip <- read_tsv(as.character(snakemake@input[["seacr_frip"]]))
-seacr_width <- read_tsv(as.character(snakemake@input[["seacr_width"]]))
-macs3_num <- read_tsv(as.character(snakemake@input[["macs3_num"]]))
-macs3_reprod <- read_tsv(as.character(snakemake@input[["macs3_reprod"]]))
-macs3_frip <- read_tsv(as.character(snakemake@input[["macs3_frip"]]))
-macs3_width <- read_tsv(as.character(snakemake@input[["macs3_width"]]))
-consolidated <- read_tsv(as.character(snakemake@input[["consolidated"]]))
+
+# Get the working directory from Snakemake parameters
+workdir <- snakemake@params[["outdir"]]
+
+# Function to create absolute paths from snakemake inputs
+get_abs_path <- function(rel_path) {
+  if (startsWith(rel_path, "/")) {
+    return(rel_path)  # Already absolute
+  } else {
+    return(file.path(workdir, rel_path))
+  }
+}
+
+stats <- read_tsv(get_abs_path(as.character(snakemake@input[["stats"]])))
+seacr_num <- read_tsv(get_abs_path(as.character(snakemake@input[["seacr_num"]])))
+seacr_reprod <- read_tsv(get_abs_path(as.character(snakemake@input[["seacr_reprod"]])))
+seacr_frip <- read_tsv(get_abs_path(as.character(snakemake@input[["seacr_frip"]])))
+seacr_width <- read_tsv(get_abs_path(as.character(snakemake@input[["seacr_width"]])))
+macs3_num <- read_tsv(get_abs_path(as.character(snakemake@input[["macs3_num"]])))
+macs3_reprod <- read_tsv(get_abs_path(as.character(snakemake@input[["macs3_reprod"]])))
+macs3_frip <- read_tsv(get_abs_path(as.character(snakemake@input[["macs3_frip"]])))
+macs3_width <- read_tsv(get_abs_path(as.character(snakemake@input[["macs3_width"]])))
+consolidated <- read_tsv(get_abs_path(as.character(snakemake@input[["consolidated"]])))
 
 # Read TSS enrichment if available
 tss_enrichment <- NULL
-if (length(as.character(snakemake@input[["tss_enrichment"]])) > 0 &&
-    file.exists(as.character(snakemake@input[["tss_enrichment"]]))) {
-  tss_enrichment <- read_tsv(as.character(snakemake@input[["tss_enrichment"]]))
+if (length(as.character(snakemake@input[["tss_enrichment"]])) > 0) {
+  tss_path <- get_abs_path(as.character(snakemake@input[["tss_enrichment"]]))
+  if (file.exists(tss_path)) {
+    tss_enrichment <- read_tsv(tss_path)
+  }
 }
 ```
 
@@ -139,9 +154,10 @@ Column {data-width=500}
 suffix_seacr <- ".peaks.stringent.bed"
 peakW_seacr <- tibble()
 
-for (absname in as.character(snakemake@input[["seacr_peaks"]])) {
-  if (file.size(absname) > 0) {
-    filename <- str_split(absname, "/")[[1]][3]
+for (relname in as.character(snakemake@input[["seacr_peaks"]])) {
+  absname <- get_abs_path(relname)
+  if (file.exists(absname) && file.size(absname) > 0) {
+    filename <- basename(absname)
     sample <- str_split(filename, suffix_seacr)[[1]][1]
     peakInfo <- read.table(absname, header = FALSE, fill = TRUE) %>%
       mutate(width = abs(V3 - V2))
@@ -175,9 +191,10 @@ if (nrow(peakW_seacr) > 0) {
 suffix_macs <- "_peaks.narrowPeak"
 peakW_macs <- tibble()
 
-for (absname in as.character(snakemake@input[["macs3_peaks"]])) {
-  if (file.size(absname) > 0) {
-    filename <- str_split(absname, "/")[[1]][3]
+for (relname in as.character(snakemake@input[["macs3_peaks"]])) {
+  absname <- get_abs_path(relname)
+  if (file.exists(absname) && file.size(absname) > 0) {
+    filename <- basename(absname)
     sample <- str_split(filename, suffix_macs)[[1]][1]
     peakInfo <- read.table(absname, header = FALSE, fill = TRUE) %>%
       mutate(width = abs(V3 - V2))
@@ -286,10 +303,11 @@ ggplotly(p6)
 fragment_files <- as.character(snakemake@input[["fragments"]])
 fragment_data <- tibble()
 
-for (file in fragment_files) {
-  if (file.exists(file)) {
-    sample <- str_extract(basename(file), "^[^.]+")
-    frags <- read_tsv(file, col_names = c("length", "count"))
+for (rel_file in fragment_files) {
+  abs_file <- get_abs_path(rel_file)
+  if (file.exists(abs_file)) {
+    sample <- str_extract(basename(abs_file), "^[^.]+")
+    frags <- read_tsv(abs_file, col_names = c("length", "count"))
     fragment_data <- bind_rows(fragment_data,
                               frags %>% mutate(sampleID = sample))
   }

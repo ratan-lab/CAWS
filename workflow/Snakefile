@@ -579,7 +579,6 @@ rule generate_html_report:
         macs3_peaks=expand("peaks/macs3/{sample}_peaks.narrowPeak", sample=EXPERIMENT),
         fragments=expand("alignments/{sample}.fraglengths.txt", sample=SAMPLES),
         tss_enrichment="stats/tss_enrichment.txt" if config["gtf_file"] else [],
-        snakefile_dir = workflow.basedir
     output:
         html_report="reports/cutntag_analysis_report.html",
     log:
@@ -588,6 +587,8 @@ rule generate_html_report:
         "envs/R.yaml"
     params:
         samplesheet=config["samplesheet"],
+        outdir=config["outdir"],
+        snakefile_dir=workflow.basedir,
     script:
         "scripts/render_html_report.R"
 
