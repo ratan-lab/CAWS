@@ -18,6 +18,8 @@ def parse_deeptools_matrix(matrix_file):
         if line.startswith('@') and 'sample_labels' in line:
             # Extract sample names from the JSON-like format
             samples_str = line.split('sample_labels')[1].strip()
+            samples_str = samples_str.split("]")[0] + ']'
+            samples_str = samples_str[2:]
             samples = json.loads(samples_str)
         elif not line.startswith('@'):
             if not data_start:
@@ -43,11 +45,11 @@ def calculate_tss_enrichment(matrix_file, output_file):
 
         # Calculate mean signal in central region (±200bp around TSS)
         center = n_bins // 2
-        window_size = 10  # ±200bp with 20bp bins = 10 bins
+        window_size = 4  # ±200bp with 50bp bins = 4 bins
         tss_region = np.mean(sample_data[:, center-window_size:center+window_size], axis=1)
 
         # Calculate mean signal in flanking regions (±1000-2000bp)
-        flank_size = 50  # 1000bp with 20bp bins = 50 bins
+        flank_size = 20  # 1000bp with 50bp bins = 20 bins
         flank_left = np.mean(sample_data[:, center-100:center-flank_size], axis=1)
         flank_right = np.mean(sample_data[:, center+flank_size:center+100], axis=1)
         flanking = (flank_left + flank_right) / 2

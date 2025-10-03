@@ -534,8 +534,8 @@ if config["gtf_file"]:
             tss="annotations/tss.bed",
             bw=expand("alignments/{sample}_raw.bw", sample=SAMPLES),
         output:
-            matrix=temp("stats/tss_matrix.gz"),
-            enrichment="stats/tss_enrichment.txt",
+            matrix=protected("stats/tss_matrix.gz"),
+            enrichment=protected("stats/tss_enrichment.txt"),
             plot="stats/tss_enrichment.pdf",
         log:
             "logs/calculate_tss_enrichment/job.log",
@@ -558,10 +558,9 @@ if config["gtf_file"]:
                 -out {output.plot} \\
                 --averageType mean \\
                 --plotTitle "TSS Enrichment Profile" \\
-                --yAxisLabel "Mean Coverage" \\
-                --xAxisLabel "Distance from TSS (bp)"
+                --yAxisLabel "Mean Coverage" 
 
-            python3 workflow/scripts/calculate_tss_enrichment.py {output.matrix} {output.enrichment}
+            python3 {workflow.basedir}/scripts/calculate_tss_enrichment.py {output.matrix} {output.enrichment}
             """
 
 rule generate_html_report:
@@ -580,6 +579,7 @@ rule generate_html_report:
         macs3_peaks=expand("peaks/macs3/{sample}_peaks.narrowPeak", sample=EXPERIMENT),
         fragments=expand("alignments/{sample}.fraglengths.txt", sample=SAMPLES),
         tss_enrichment="stats/tss_enrichment.txt" if config["gtf_file"] else [],
+        snakefile_dir = workflow.basedir
     output:
         html_report="reports/cutntag_analysis_report.html",
     log:
@@ -588,11 +588,8 @@ rule generate_html_report:
         "envs/R.yaml"
     params:
         samplesheet=config["samplesheet"],
-    shell:
-        """
-        mkdir -p reports
-        Rscript workflow/scripts/render_html_report.R
-        """
+    script:
+        "scripts/render_html_report.R"
 
 onsuccess:
     shutil.rmtree(os.path.join(config["outdir"], "alignments"), ignore_errors=True)
