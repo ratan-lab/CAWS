@@ -39,27 +39,32 @@ def calculate_tss_enrichment(matrix_file, output_file):
 
     enrichments = []
 
+    center = n_bins // 2
+    window_size = 4   # ±200 bp if 50 bp bins
+    flank_size = 20   # 1000 bp if 50 bp bins
+    max_flank = 100   # 5000 bp if 50 bp bins
+    
     for i, sample in enumerate(samples):
-        # Extract data for this sample
         sample_data = data[:, i*n_bins:(i+1)*n_bins]
-
-        # Calculate mean signal in central region (±200bp around TSS)
-        center = n_bins // 2
-        window_size = 4  # ±200bp with 50bp bins = 4 bins
-        tss_region = np.mean(sample_data[:, center-window_size:center+window_size], axis=1)
-
-        # Calculate mean signal in flanking regions (±1000-2000bp)
-        flank_size = 20  # 1000bp with 50bp bins = 20 bins
-        flank_left = np.mean(sample_data[:, center-100:center-flank_size], axis=1)
-        flank_right = np.mean(sample_data[:, center+flank_size:center+100], axis=1)
+    
+        # Define safe bounds
+        left_start = max(center - max_flank, 0)
+        left_end   = max(center - flank_size, 0)
+        right_start = min(center + flank_size, n_bins)
+        right_end   = min(center + max_flank, n_bins)
+    
+        center_start = max(center - window_size, 0)
+        center_end   = min(center + window_size, n_bins)
+    
+        # Compute means only on valid slices
+        tss_region = np.mean(sample_data[:, center_start:center_end], axis=1)
+        flank_left = np.mean(sample_data[:, left_start:left_end], axis=1)
+        flank_right = np.mean(sample_data[:, right_start:right_end], axis=1)
         flanking = (flank_left + flank_right) / 2
+    
+        valid = flanking > 1e-3
+        enrichment = np.mean(tss_region[valid] / flanking[valid]) if np.any(valid) else np.nan
 
-        # Calculate enrichment score (avoid division by zero)
-        valid_regions = (flanking > 0.001)
-        if np.sum(valid_regions) > 0:
-            enrichment = np.mean(tss_region[valid_regions] / flanking[valid_regions])
-        else:
-            enrichment = 0.0
 
         enrichments.append((sample, enrichment))
 
