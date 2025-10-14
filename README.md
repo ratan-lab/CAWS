@@ -1,45 +1,161 @@
-# CUT&Tag Analysis With Snakemake
+# CAWS: CUT&Tag Analysis Workflow System  
+## *A Snakemake-based pipeline for comprehensive CUT&Tag data analysis*  
 
-After cloning the repository, we need to fill in the name of the user account in `clusterconfig.json` that will be used to provide SUs for analysis. The `config.json` should be filled with the details for analysis. 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Snakemake](https://img.shields.io/badge/snakemake-≥6.0.0-brightgreen.svg)](https://snakemake.bitbucket.io)
+[![Python](https://img.shields.io/badge/python-≥3.7-blue.svg)](https://python.org)
+[![R](https://img.shields.io/badge/R-≥4.0-blue.svg)](https://r-project.org)
 
-Here are the details of the various entries to be filled:
-- samplesheet: Absolute path for a TSV file with the following columns
-    - sampleID: A unique identifier for each sample
-    - condition: A identifier shared by biological replicates
-    - group: Currently unused, but will be used to specify controls in future
-    - read1: Absolute path of the zipped fastq file of read1
-    - read2: Absolute path of the zipped fastq file of read2
-- reference_fa: Absolute path of the reference genome to be used for alignment
-- bt2_idx: Absolute path for the bowtie2 index of the reference genome
-- reference_fai: Absolute path for the fasta index of the reference genome
-- chromosome_file: Absolute path of a file with chromosomes to include in the analysis. The remaining contigs and chromosomes are not used in peak calls
-- blacklist: Absolute path of a file with regions that should be removed prior to peak calls. The blacklist for humans are available here : https://sites.google.com/site/anshulkundaje/projects/blacklists
-- ecoli_reference: Absolute path of the E.Coli reference genome
-- ecoli_bt2_idx: Absolute path for the bowtie2 index of the E.Coli genome
-- trim_adapters: true/false. Should adapters be trimmed? We use trim_galore which identifies the adapters before trimming them
-- igg_control: true/false. Should IgG controls be used for peak calling? When true, control samples (marked as "Control" in the condition column) are used as background for both SEACR and MACS3. Controls are matched to experiments via the 'group' field. The pipeline validates that each group has exactly one Control sample and at least one experimental sample when this option is enabled
-- mt_chrom: The name of the mitochondrial genome in the reference. Reads aligning to the mtDNA are counted in stats, and removed prior to peak calls
-- dedup: true/false. Should the PCR duplicates be removed prior to peak calls?
-- minquality: What is the minimum mapping quality we should include in the counts for calling peaks
-- fragment_min: Minimum fragment size for alignment (default: 10)
-- fragment_max: Maximum fragment size for alignment (default: 700)
-- seacr_qvalue: Statistical threshold for SEACR peak calling when no control is used (default: 0.01)
-- macs3_qvalue_with_control: Q-value threshold for MACS3 peak calling with IgG control (default: 0.01)
-- macs3_qvalue_no_control: Q-value threshold for MACS3 peak calling without control (default: 0.001)
-- heatmap_window: Window size (bp) around peak centers for heatmap generation (default: 3000)
-- gtf_file: Absolute path to GTF annotation file for TSS enrichment analysis (optional - leave empty to skip)
-- outdir: Absolute path of the output directory of the analysis
+---
 
-Example config file
+## Overview  
 
+**CAWS (CUT&Tag Analysis Workflow System)** is a comprehensive Snakemake pipeline for analyzing CUT&Tag (Cleavage Under Targets and Tagmentation) sequencing data. CUT&Tag is an advanced epigenomic profiling method that maps protein–DNA interactions and chromatin modifications with greater sensitivity and specificity than traditional ChIP-seq approaches.  
+
+---
+
+## Why Use CAWS?  
+
+- **CUT&Tag Optimized** – Purpose-built for CUT&Tag data with specialized QC and peak-calling strategies  
+- **Comprehensive Analysis** – End-to-end workflow from raw reads to interactive visualizations  
+- **Dual Peak Calling** – Generates peak calls using both SEACR and MACS3 for robust peak detection  
+- **Interactive Reports** – HTML dashboards with Plotly-based visualizations  
+- **Reproducible** – Conda-based environment management for consistent results  
+
+---
+
+## Target Audience  
+
+CAWS is designed for:  
+- Bioinformaticians analyzing CUT&Tag datasets  
+- Researchers studying chromatin biology or epigenomics  
+- Laboratories seeking standardized workflows  
+- Users requiring comprehensive QC and visualization  
+
+---
+
+## Prerequisites  
+
+### Required Software  
+- **Snakemake** ≥6.0.0  
+- **Conda** or **Mamba**  
+- **Python** ≥3.7  
+- **R** ≥4.0  
+
+### System Requirements  
+- **Storage**: ~50 GB free space (typical dataset)  
+- **Memory**: ≥8 GB RAM (16 GB+ recommended)  
+- **CPU**: ≥4 cores  
+- **OS**: Linux or macOS (cluster execution recommended)  
+
+### Input Data Requirements  
+- Paired-end **FASTQ** files (gzipped)  
+- Reference genome (**FASTA** with Bowtie2 index)  
+- **Annotation** file (**GTF**, optional for TSS enrichment)  
+- **Blacklist** regions (**BED**)  
+- **Sample metadata** (**TSV**)  
+
+---
+
+## Quick Start  
+
+### 1. Clone and Set Up  
+
+```bash
+# Clone the repository
+git clone https://github.com/your-username/CAWS.git
+cd CAWS
+
+# Create and activate Conda environment
+conda env create -f environment.yml
+conda activate caws
 ```
+
+---
+
+### 2. Prepare Configuration Files  
+
+**Sample Sheet (`samplesheet.tsv`)**  
+
+```tsv
+sampleID	condition	group	read1	read2
+sample1	Treatment	group1	/path/to/sample1_R1.fastq.gz	/path/to/sample1_R2.fastq.gz
+sample2	Control	group1	/path/to/sample2_R1.fastq.gz	/path/to/sample2_R2.fastq.gz
+```
+
+**Configuration File (`config.json`)**  
+
+```bash
+cp config.example.json config.json
+# Edit config.json with your file paths and parameters
+```
+
+---
+
+### 3. Run the Analysis  
+
+**Local Execution (small datasets)**  
+```bash
+snakemake --cores 8 --use-conda --configfile config.json
+```
+
+**SLURM Cluster Execution (recommended for large datasets)**  
+```bash
+snakemake \
+    --cores 1 \
+    --configfile config.json \
+    --use-conda \
+    --jobs 50 \
+    --cluster-config clusterconfig.json \
+    --cluster "sbatch --partition {cluster.queue} --cpus-per-task {cluster.nCPUs} --mem {cluster.memory}"
+```
+
+---
+
+### 4. View Results  
+
+```bash
+reports/cutntag_analysis_report.html
+```
+
+---
+
+## Configuration Details  
+
+<details>
+<summary><b>Click to expand configuration documentation</b></summary>
+
+| Parameter | Description |
+|------------|-------------|
+| `samplesheet` | Path to TSV file describing samples (columns: `sampleID`, `condition`, `group`, `read1`, `read2`) |
+| `reference_fa` | Reference genome FASTA file |
+| `bt2_idx` | Bowtie2 index prefix for the reference genome |
+| `reference_fai` | FASTA index file |
+| `chromosome_file` | List of chromosomes to include |
+| `blacklist` | BED file of genomic regions to exclude |
+| `ecoli_reference` | E. coli reference genome (for contamination assessment) |
+| `ecoli_bt2_idx` | Bowtie2 index prefix for E. coli |
+| `trim_adapters` | `true`/`false` — enable adapter trimming via Trim Galore |
+| `igg_control` | `true`/`false` — use IgG controls as background for peak calling |
+| `mt_chrom` | Name of mitochondrial chromosome (e.g., `"chrM"`) |
+| `dedup` | `true`/`false` — remove PCR duplicates before peak calling |
+| `minquality` | Minimum mapping quality threshold |
+| `fragment_min`, `fragment_max` | Fragment size range for alignments |
+| `seacr_qvalue`, `macs3_qvalue_with_control`, `macs3_qvalue_no_control` | Statistical thresholds for SEACR/MACS3 |
+| `heatmap_window` | Window size (bp) around peaks for heatmaps |
+| `gtf_file` | Path to GTF file for TSS enrichment (optional) |
+| `outdir` | Output directory for analysis results |
+
+**Example `config.json`:**
+
+```json
 {
     "samplesheet": "samplesheet.tsv",
-    "reference_fa": "/share/gatk_bundle/ftp.broadinstitute.org/bundle/2.8/hg38dh/hs38DH.fa",
-    "bt2_idx": "/share/gatk_bundle/ftp.broadinstitute.org/bundle/2.8/hg38dh/hs38DH",
-    "reference_fai": "/share/gatk_bundle/ftp.broadinstitute.org/bundle/2.8/hg38dh/hs38DH.fa.fai",
-    "chromosome_file": "/share/gatk_bundle/ftp.broadinstitute.org/bundle/2.8/hg38dh/hs38DH.primary.txt", 
-    "blacklist": "/share/gatk_bundle/ftp.broadinstitute.org/bundle/2.8/hg38dh/blacklist.bed.gz",
+    "reference_fa": "/share/gatk_bundle/hg38/hs38DH.fa",
+    "bt2_idx": "/share/gatk_bundle/hg38/hs38DH",
+    "reference_fai": "/share/gatk_bundle/hg38/hs38DH.fa.fai",
+    "chromosome_file": "/share/gatk_bundle/hg38/hs38DH.primary.txt",
+    "blacklist": "/share/gatk_bundle/hg38/blacklist.bed.gz",
     "ecoli_reference": "/share/gatk_bundle/ecoli/MG1655.fa",
     "ecoli_bt2_idx": "/share/gatk_bundle/ecoli/MG1655",
     "trim_adapters": true,
@@ -54,13 +170,20 @@ Example config file
     "macs3_qvalue_no_control": 0.001,
     "heatmap_window": 3000,
     "gtf_file": "",
-    "outdir": "/nv/vol169/cphg_ratan/ar7jq/CAWS/20230324"
+    "outdir": "/data/CAWS/20230324"
 }
 ```
 
-### Running the analysis on SLURM cluster
+</details>
 
-```
+---
+
+## Running on SLURM  
+
+<details>
+<summary><b>Click to view SLURM command example</b></summary>
+
+```bash
 module load snakemake
 
 snakemake \
@@ -74,142 +197,140 @@ snakemake \
     --keep-going \
     --jobs 100 \
     --use-conda \
-    --conda-prefix /nv/vol169/cphg_ratan/ar7jq/CAWS/environment \
+    --conda-prefix /data/CAWS/environment \
     --verbose \
     --cluster-config clusterconfig.json \
-    --cluster " sbatch --partition {cluster.queue} -J {cluster.name} --cpus-per-task {cluster.nCPUs} --mem {cluster.memory} --time {cluster.maxTime} -o \"{cluster.output}\" -e \"{cluster.error}\" --mail-type=None --parsable -A {cluster.account} "
+    --cluster "sbatch --partition {cluster.queue} -J {cluster.name} --cpus-per-task {cluster.nCPUs} --mem {cluster.memory} --time {cluster.maxTime} -o '{cluster.output}' -e '{cluster.error}' --mail-type=None --parsable -A {cluster.account}"
 ```
+</details>
 
-## Features
+---
 
-### Core Pipeline
-- Quality control with FastQC
-- Adapter trimming with trim_galore
-- Alignment with Bowtie2
-- Duplicate removal with Picard
-- Peak calling with SEACR and MACS3
-- Contamination detection (mtDNA, E.coli)
-- Fragment size analysis
-- Replicate correlation analysis
-- Peak reproducibility assessment
-- FRiP score calculation
+## Features  
 
-### Enhanced Analysis & QC (v2.0)
-- **TSS enrichment calculation** - Signal enrichment around transcription start sites
-- **Peak width distribution analysis** - Detailed peak characteristics and categorization
-- **Interactive HTML reports** - Comprehensive dashboard with plotly visualizations
-- **Peak quality metrics** - Narrow vs broad peak classification
-- **Method comparison** - Side-by-side SEACR vs MACS3 analysis
+### Core Pipeline  
+- Quality control (**FastQC**)  
+- Adapter trimming (**Trim Galore**)  
+- Alignment (**Bowtie2**)  
+- Duplicate removal (**Picard**)  
+- Peak calling (**SEACR** & **MACS3**)  
+- Contamination detection (mtDNA, *E. coli*)  
+- Fragment size & correlation analysis  
+- FRiP score and reproducibility metrics  
 
-## Output Structure
+### Enhanced Analysis (v2.0)  
+- **TSS enrichment profiling**  
+- **Peak width and shape distribution**  
+- **Interactive HTML dashboards (Plotly)**  
+- **SEACR vs MACS3 method comparison**  
+
+---
+
+## Output Structure  
+
+<details>
+<summary><b>Click to expand output directory layout</b></summary>
 
 ```
 output_directory/
-├── qc/                   # FastQC quality control reports
-├── trimmed/              # Adapter-trimmed reads (if enabled)
-├── alignments/           # Alignment files and temporary data
-├── dedupalignments/      # Deduplicated alignments (if enabled)
-├── bedalignments/        # Processed BED files for peak calling
-├── peaks/                # Peak calling results
-│   ├── seacr/           # SEACR peak files
-│   └── macs3/           # MACS3 peak files
-├── stats/                # Summary statistics and plots
-│   ├── seacr/           # SEACR-specific analysis
-│   └── macs3/           # MACS3-specific analysis
-├── reports/              # Interactive HTML reports
-├── annotations/          # TSS annotations (if GTF provided)
-└── logs/                 # Log files
+├── qc/                  # FastQC reports
+├── trimmed/             # Adapter-trimmed reads
+├── alignments/          # BAM alignments
+├── dedupalignments/     # Deduplicated BAMs
+├── bedalignments/       # BED files for peak calling
+├── peaks/
+│   ├── seacr/           # SEACR peaks
+│   └── macs3/           # MACS3 peaks
+├── stats/
+│   ├── seacr/           # SEACR metrics
+│   └── macs3/           # MACS3 metrics
+├── reports/             # Interactive HTML reports
+├── annotations/         # GTF-based TSS data
+└── logs/                # Log files
 ```
+</details>
 
-## Key Output Files
+---
 
-### Summary Reports
-- `reports/cutntag_analysis_report.html` - **Interactive HTML dashboard** with all analysis results
-- `stats/stats.txt` - Alignment and QC statistics
-- `stats/peaks_consolidated.txt` - Combined peak analysis results with width metrics
+## Interactive HTML Dashboard  
 
-### Static Visualizations
-- `stats/fragments.pdf` - Fragment size distribution
-- `stats/replicates.pdf` - Replicate correlation analysis
-- `stats/seacr/peaks_fig.pdf` - SEACR peak analysis plots (multi-page with width analysis)
-- `stats/macs3/peaks_fig.pdf` - MACS3 peak analysis plots (multi-page with width analysis)
-- `stats/seacr/peaks_width_analysis.pdf` - Dedicated SEACR peak width analysis
-- `stats/macs3/peaks_width_analysis.pdf` - Dedicated MACS3 peak width analysis
+**Report:** `reports/cutntag_analysis_report.html`  
 
-### Enhanced Analysis Files
-- `stats/tss_enrichment.txt` - TSS enrichment scores (if GTF provided)
-- `stats/tss_enrichment.pdf` - TSS enrichment profile plots (if GTF provided)
-- `stats/seacr/peaks_width_stats.txt` - Detailed SEACR peak width statistics
-- `stats/macs3/peaks_width_stats.txt` - Detailed MACS3 peak width statistics
-- `annotations/tss.bed` - Extracted transcription start sites (if GTF provided)
+### Dashboard Sections  
+- **Overview:** Sample summaries, alignment metrics, and FRiP scores  
+- **Peak Analysis:** Width distributions, peak counts, and statistics  
+- **Quality Control:** Fragment size profiles, reproducibility metrics, TSS enrichment  
+- **Method Comparison:** SEACR vs MACS3 correlation and overlap  
 
-## Interactive HTML Report
+**Interactive Features:**  
+- Plotly-based zoom/pan/hover  
+- Sortable, searchable data tables  
+- Conditional TSS panels (shown only if GTF is provided)  
 
-The pipeline generates a comprehensive interactive HTML dashboard (`reports/cutntag_analysis_report.html`) featuring:
+---
 
-### Multi-page Dashboard
-- **Overview**: Sample summaries, alignment stats, peak count/FRiP comparisons
-- **Peak Analysis**: Interactive peak width distributions, statistics tables, categorization
-- **Quality Control**: Reproducibility analysis, fragment distributions, TSS enrichment
-- **Method Comparison**: SEACR vs MACS3 correlation plots and comparisons
+## TSS Enrichment Analysis  
 
-### Interactive Features
-- **Plotly integration**: Hover tooltips, zoom, pan functionality
-- **Responsive tables**: Sortable, searchable data tables
-- **Conditional content**: TSS analysis shown only when GTF file provided
-- **Modern design**: Professional dashboard layout
+<details>
+<summary><b>Click to expand details</b></summary>
 
-## TSS Enrichment Analysis
-
-### Configuration
-To enable TSS enrichment analysis, provide a GTF file path in your config:
+Enable by specifying a GTF file in your configuration:
 
 ```json
-{
-    "gtf_file": "/path/to/your/genes.gtf"
-}
+"gtf_file": "/path/to/genes.gtf"
 ```
 
-**Supported formats:**
-- Regular GTF files: `genes.gtf`
-- Gzipped GTF files: `genes.gtf.gz` (automatically detected and decompressed)
+**Features:**  
+- Extracts TSS sites from GTF (`.gtf` or `.gtf.gz`)  
+- Calculates enrichment ±2 kb around TSS  
+- Generates TSS enrichment plots and scores  
+- Integrates results into the dashboard  
 
-### Analysis Features
-- Extracts transcription start sites from GTF annotations
-- Calculates signal enrichment around TSS (±2kb window)
-- Generates TSS enrichment profile plots
-- Computes enrichment scores (TSS signal vs flanking regions)
-- Integrates results into HTML dashboard
+**Outputs:**  
+- `annotations/tss.bed` — Extracted TSS coordinates  
+- `stats/tss_enrichment.txt` — Per-sample enrichment scores  
+</details>
 
-### Output Files
-- `annotations/tss.bed` - Extracted TSS coordinates
-- `stats/tss_enrichment.txt` - Per-sample enrichment scores
-- `stats/tss_enrichment.pdf` - TSS profile visualization
+---
 
-## Peak Width Analysis
+## Peak Width Analysis  
 
-### Metrics Calculated
-- **Summary statistics**: median, mean, quartiles, min/max widths
-- **Peak categorization**:
-  - Narrow peaks: ≤500bp (indicate high specificity)
-  - Broad peaks: >2000bp (indicate open chromatin regions)
-- **Method comparison**: SEACR vs MACS3 peak characteristics
+<details>
+<summary><b>Click to expand details</b></summary>
 
-### Visualizations
-- Peak width distribution histograms by condition
-- Peak category percentages (narrow vs broad)
-- Sample-level width statistics tables
+**Metrics:**  
+- Summary statistics (mean, median, quartiles)  
+- Peak categories:  
+  - Narrow ≤ 500 bp (high specificity)  
+  - Broad > 2000 bp (open chromatin regions)  
+- Comparison between SEACR and MACS3  
 
-## Citation
+**Visualizations:**  
+- Histograms and category proportions  
+- Sample-level statistics tables  
+- Interactive Plotly charts  
+</details>
 
-If you use this pipeline, please cite the relevant tools:
+---
 
-- Snakemake
-- Bowtie2
-- SEACR
-- MACS3
-- FastQC
-- trim_galore
-- Picard
-- deepTools (for TSS analysis)
-- R/ggplot2, plotly, flexdashboard (for visualizations)
+### Key Dependencies  
+- **Snakemake** — Workflow management  
+- **Bowtie2** — Alignment  
+- **SEACR** — CUT&RUN/CUT&Tag peak calling  
+- **MACS3** — Model-based ChIP-seq analysis  
+- **FastQC**, **Trim Galore**, **Picard**, **deepTools**  
+- **R packages** — `ggplot2`, `plotly`, `flexdashboard`  
+
+---
+
+## License  
+
+This project is licensed under the **MIT License**.  
+See the [LICENSE](LICENSE) file for details.  
+
+---
+
+## Acknowledgements  
+
+We thank the developers of all tools integrated into CAWS and the wider bioinformatics community for providing the foundational software that makes this workflow possible.  
+

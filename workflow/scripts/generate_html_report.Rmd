@@ -1,5 +1,5 @@
 ---
-title: "CUT&Tag Analysis Report"
+title: "CAWS: CUT&Tag Analysis Report"
 output:
   flexdashboard::flex_dashboard:
     orientation: columns
