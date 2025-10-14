@@ -4,8 +4,9 @@ output:
   flexdashboard::flex_dashboard:
     orientation: columns
     vertical_layout: fill
-    theme: bootstrap
-    source_code: embed
+    theme:
+        version: 4
+        bootswatch: flatly
 ---
 
 ```{r setup, include=FALSE}
@@ -15,10 +16,68 @@ library(DT)
 library(tidyverse)
 library(viridis)
 library(GenomicRanges)
-library(chromVAR)
+library(fs)
+library(glue)
+library(htmltools)
+
+fragment_length_xlim <- c(0,500)
+hist_bins <- 50
+
+# Simple file reading function
+read_data <- function(file_path) {
+    read_tsv(file_path, show_col_types = FALSE)
+}
+
+# Helper function for percentage string conversion
+parse_percentage <- function(pct_string) {
+  as.numeric(str_remove(pct_string, "%"))
+}
+
+# Simple theme function
+simple_theme <- function() {
+  theme_minimal() +
+    theme(
+      plot.title = element_text(face = "bold"),
+      legend.position = "bottom",
+      panel.grid.minor = element_blank()
+    )
+}
+
+# Enhanced data table with export functionality
+create_enhanced_datatable <- function(data, filename_prefix, caption = "") {
+  if (nrow(data) == 0) {
+    return(DT::datatable(tibble(), caption = "No data available"))
+  }
+
+  DT::datatable(
+    data,
+    extensions = c('Buttons', 'Responsive'),
+    options = list(
+      dom = 'Bfrtip',
+      buttons = list(
+        list(extend = 'csv', filename = paste0(filename_prefix, '_', Sys.Date())),
+        list(extend = 'excel', filename = paste0(filename_prefix, '_', Sys.Date())),
+        'copy', 'print'
+      ),
+      pageLength = 15,
+      scrollX = TRUE,
+      responsive = TRUE,
+      autoWidth = TRUE,
+      columnDefs = list(list(className = 'dt-center', targets = "_all"))
+    ),
+    caption = caption,
+    class = 'cell-border stripe hover compact',
+    rownames = FALSE
+  ) |>
+    DT::formatStyle(
+      columns = colnames(data),
+      fontSize = '12px',
+      fontFamily = 'Arial'
+    )
+}
 
 # Read input data - use absolute paths based on Snakemake working directory
-samplesheet <- read_tsv(snakemake@params[["samplesheet"]])
+samplesheet <- read_data(snakemake@params[["samplesheet"]])
 
 # Get the working directory from Snakemake parameters
 workdir <- snakemake@params[["outdir"]]
@@ -32,408 +91,634 @@ get_abs_path <- function(rel_path) {
   }
 }
 
-stats <- read_tsv(get_abs_path(as.character(snakemake@input[["stats"]])))
-seacr_num <- read_tsv(get_abs_path(as.character(snakemake@input[["seacr_num"]])))
-seacr_reprod <- read_tsv(get_abs_path(as.character(snakemake@input[["seacr_reprod"]])))
-seacr_frip <- read_tsv(get_abs_path(as.character(snakemake@input[["seacr_frip"]])))
-seacr_width <- read_tsv(get_abs_path(as.character(snakemake@input[["seacr_width"]])))
-macs3_num <- read_tsv(get_abs_path(as.character(snakemake@input[["macs3_num"]])))
-macs3_reprod <- read_tsv(get_abs_path(as.character(snakemake@input[["macs3_reprod"]])))
-macs3_frip <- read_tsv(get_abs_path(as.character(snakemake@input[["macs3_frip"]])))
-macs3_width <- read_tsv(get_abs_path(as.character(snakemake@input[["macs3_width"]])))
-consolidated <- read_tsv(get_abs_path(as.character(snakemake@input[["consolidated"]])))
+stats <- read_data(get_abs_path(as.character(snakemake@input[["stats"]])))
+seacr_num <- read_data(get_abs_path(as.character(snakemake@input[["seacr_num"]])))
+seacr_reprod <- read_data(get_abs_path(as.character(snakemake@input[["seacr_reprod"]])))
+seacr_frip <- read_data(get_abs_path(as.character(snakemake@input[["seacr_frip"]])))
+seacr_width <- read_data(get_abs_path(as.character(snakemake@input[["seacr_width"]])))
+macs3_num <- read_data(get_abs_path(as.character(snakemake@input[["macs3_num"]])))
+macs3_reprod <- read_data(get_abs_path(as.character(snakemake@input[["macs3_reprod"]])))
+macs3_frip <- read_data(get_abs_path(as.character(snakemake@input[["macs3_frip"]])))
+macs3_width <- read_data(get_abs_path(as.character(snakemake@input[["macs3_width"]])))
+consolidated <- read_data(get_abs_path(as.character(snakemake@input[["consolidated"]])))
 
 # Read TSS enrichment if available
 tss_enrichment <- NULL
 if (length(as.character(snakemake@input[["tss_enrichment"]])) > 0) {
   tss_path <- get_abs_path(as.character(snakemake@input[["tss_enrichment"]]))
   if (file.exists(tss_path)) {
-    tss_enrichment <- read_tsv(tss_path)
+    tss_enrichment <- read_data(tss_path)
   }
 }
 ```
 
-Overview {data-icon="fa-chart-line"}
+Sample Details {data-icon="fa-list-alt"}
 =======================================================================
 
-Column {data-width=350}
------------------------------------------------------------------------
-
-### Sample Summary
+### Sample Summary Table
 
 ```{r}
-summary_stats <- consolidated %>%
-  select(sampleID, condition, seacr_peakN, macs3_peakN, seacr_FRiP, macs3_FRiP) %>%
-  mutate(
-    seacr_peakN = round(seacr_peakN, 0),
-    macs3_peakN = round(macs3_peakN, 0),
-    seacr_FRiP = round(seacr_FRiP, 2),
-    macs3_FRiP = round(macs3_FRiP, 2)
-  )
+# Enhanced summary statistics table
+if (nrow(consolidated) > 0) {
+  summary_stats <- consolidated |>
+    select(sampleID, condition, seacr_peakN, macs3_peakN, seacr_FRiP, macs3_FRiP, seacr_median_gc, macs3_median_gc) |>
+    mutate(
+      seacr_peaks = round(seacr_peakN, 0),
+      macs3_peaks = round(macs3_peakN, 0),
+      seacr_frip_pct = round(seacr_FRiP, 2),
+      macs3_frip_pct = round(macs3_FRiP, 2),
+      seacr_gc_pct = round(seacr_median_gc * 100, 1),
+      macs3_gc_pct = round(macs3_median_gc * 100, 1)
+    ) |>
+    select(-c(seacr_peakN, macs3_peakN, seacr_FRiP, macs3_FRiP, seacr_median_gc, macs3_median_gc))
 
-DT::datatable(summary_stats,
-              options = list(pageLength = 10, autoWidth = TRUE),
-              colnames = c("Sample", "Condition", "SEACR Peaks", "MACS3 Peaks",
-                          "SEACR FRiP", "MACS3 FRiP"),
-              caption = "Summary of peak calling results for all samples")
+  if (!is.null(tss_enrichment) && nrow(tss_enrichment) > 0) {
+    summary_stats <- left_join(summary_stats, tss_enrichment, by = c("sampleID" = "sample_id"))
+  }
+
+  create_enhanced_datatable(
+    summary_stats,
+    filename_prefix = "peak_calling_summary",
+    caption = "Detailed peak calling results and quality metrics for all samples"
+  )
+} else {
+  div(class = "alert alert-warning", "No peak calling data available")
+}
 ```
+
+Alignment {data-icon="fa-bullseye"}
+========================================================================
 
 ### Alignment Statistics
 
 ```{r}
-DT::datatable(stats,
-              options = list(pageLength = 10, autoWidth = TRUE),
-              caption = "Alignment and quality control statistics")
+# Enhanced alignment statistics table
+if (nrow(stats) > 0) {
+  create_enhanced_datatable(
+    stats,
+    filename_prefix = "alignment_statistics",
+    caption = "Comprehensive alignment and quality control statistics"
+  )
+} else {
+  div(class = "alert alert-warning", "No alignment statistics available")
+}
 ```
 
-Column {data-width=650}
------------------------------------------------------------------------
-
-### Peak Numbers by Method and Condition
+### Alignment Statistics Plots
 
 ```{r}
-peak_comparison <- consolidated %>%
-  select(sampleID, condition, seacr_peakN, macs3_peakN) %>%
-  pivot_longer(cols = c(seacr_peakN, macs3_peakN),
-               names_to = "method", values_to = "peak_count") %>%
-  mutate(method = case_when(
-    method == "seacr_peakN" ~ "SEACR",
-    method == "macs3_peakN" ~ "MACS3"
-  ))
+# Function to create alignment quality plot
+create_alignment_barplot <- function(stats_data, sample_data) {
+  if (nrow(stats_data) == 0 || nrow(sample_data) == 0) {
+    return(ggplot() + labs(title = "No data available"))
+  }
 
-p1 <- peak_comparison %>%
-  ggplot(aes(x = condition, y = peak_count, fill = method)) +
-  geom_boxplot(alpha = 0.7) +
-  geom_point(aes(color = method), position = position_jitterdodge(dodge.width = 0.75)) +
-  scale_fill_viridis_d(begin = 0.1, end = 0.8, option = "plasma") +
-  scale_color_viridis_d(begin = 0.1, end = 0.8, option = "plasma") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  labs(title = "Peak Count Comparison",
-       x = "Condition", y = "Number of Peaks",
-       fill = "Method", color = "Method")
+  # Parse percentage values and calculate metrics
+  alignment_data <- stats_data |>
+    left_join(sample_data, by = c("Sample" = "sampleID")) |>
+    mutate(
+      alignment_rate = parse_percentage(AlignmentRate),
+      duplication_rate = parse_percentage(DuplicationRate),
+      mt_alignment_rate = parse_percentage(MtAlignmentRate),
+      ecoli_alignment_rate = parse_percentage(EcoliAlignmentRate)
+    ) |>
+    select(Sample, alignment_rate, duplication_rate, mt_alignment_rate, ecoli_alignment_rate) |>
+    pivot_longer(
+      cols = -Sample,
+      names_to = "metric",
+      values_to = "percentage"
+    ) |>
+    mutate(
+      metric_label = case_when(
+        metric == "alignment_rate" ~ "Total Aligned",
+        metric == "duplication_rate" ~ "Duplicates",
+        metric == "mt_alignment_rate" ~ "mtDNA",
+        metric == "ecoli_alignment_rate" ~ "E.coli"
+      )
+    )
 
-ggplotly(p1)
+  # Create alignment plot
+  alignment_data |>
+    ggplot(aes(x = Sample, y = percentage, fill = metric_label)) +
+    geom_col(position = "dodge", alpha = 0.8) +
+    scale_fill_viridis_d(option = "plasma", begin = 0.1, end = 0.9) +
+    simple_theme() +
+    theme(
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      legend.position = "bottom"
+    ) +
+    labs(
+      title = "CUT&Tag Alignment Summary",
+      x = "",
+      y = "Percentage (%)",
+      fill = "Metric"
+    )
+}
+
+alignment_plot <- create_alignment_barplot(stats, samplesheet)
+ggplotly(alignment_plot) |>
+  layout(
+    title = list(text = "Alignment Quality Summary", font = list(size = 16)),
+    showlegend = TRUE,
+    legend = list(orientation = "h", xanchor = "center", x = 0.5)
+  ) 
 ```
 
-### FRiP Scores by Method and Condition
-
-```{r}
-frip_comparison <- consolidated %>%
-  select(sampleID, condition, seacr_FRiP, macs3_FRiP) %>%
-  pivot_longer(cols = c(seacr_FRiP, macs3_FRiP),
-               names_to = "method", values_to = "frip_score") %>%
-  mutate(method = case_when(
-    method == "seacr_FRiP" ~ "SEACR",
-    method == "macs3_FRiP" ~ "MACS3"
-  ))
-
-p2 <- frip_comparison %>%
-  ggplot(aes(x = condition, y = frip_score, fill = method)) +
-  geom_boxplot(alpha = 0.7) +
-  geom_point(aes(color = method), position = position_jitterdodge(dodge.width = 0.75)) +
-  scale_fill_viridis_d(begin = 0.1, end = 0.8, option = "plasma") +
-  scale_color_viridis_d(begin = 0.1, end = 0.8, option = "plasma") +
-  theme_minimal() +
-  labs(title = "FRiP Score Comparison",
-       x = "Condition", y = "FRiP Score (%)",
-       fill = "Method", color = "Method")
-
-ggplotly(p2)
-```
-
-Peak Analysis {data-icon="fa-mountain"}
+Fragment Length {data-icon="fa-ruler-horizontal"}
 =======================================================================
 
-Column {data-width=500}
------------------------------------------------------------------------
-
-### Peak Width Distribution - SEACR
-
 ```{r}
-# Reconstruct peak width data for SEACR
-suffix_seacr <- ".peaks.stringent.bed"
-peakW_seacr <- tibble()
+# Generic data loading function
+load_file_data <- function(dir, pattern, process_func) {
+  files <- fs::dir_ls(dir, glob = pattern)
+  if (length(files) == 0) return(tibble())
 
-for (relname in as.character(snakemake@input[["seacr_peaks"]])) {
-  absname <- get_abs_path(relname)
-  if (file.exists(absname) && file.size(absname) > 0) {
-    filename <- basename(absname)
-    sample <- str_split(filename, suffix_seacr)[[1]][1]
-    peakInfo <- read.table(absname, header = FALSE, fill = TRUE) %>%
-      mutate(width = abs(V3 - V2))
-    peakW_seacr <- tibble(width = peakInfo$width, sampleID = sample) %>%
-      bind_rows(peakW_seacr)
+  files |>
+    map_dfr(~ {
+      tryCatch(process_func(.x), error = function(e) tibble())
+    })
+}
+
+# Specific processing functions
+process_fragment_file <- function(file_path) {
+  sample_name <- str_remove(basename(file_path), ".fraglengths.txt")
+  read_delim(file_path, col_names = c("fragment_length", "fragment_count"), show_col_types = FALSE) |>
+    mutate(sample_name = sample_name)
+}
+
+# Function to create fragment length plot
+create_fragment_plot <- function(frag_data, xlim = fragment_length_xlim) {
+  if (nrow(frag_data) == 0) {
+    return(ggplot() + labs(title = "No fragment length data available"))
   }
+
+  p <- frag_data |>
+    ggplot(aes(x = fragment_length, y = fragment_count, color = sample_name, group = sample_name)) +
+    geom_line(linewidth = 1.2, alpha = 0.8) +
+    scale_color_viridis_d(option = "magma", begin = 0.1, end = 0.9, name = "Sample") +
+    simple_theme() +
+    labs(
+      title = "Fragment Length Distribution",
+      x = "Fragment Length (bp)",
+      y = "Fragment Count",
+      color = "Sample"
+    ) +
+    coord_cartesian(xlim = xlim) +
+    theme(
+      legend.position = "bottom",
+      legend.text = element_text(size = 8),
+      legend.title = element_text(size = 9, face = "bold")
+    )
+
+  return(p)
 }
 
-if (nrow(peakW_seacr) > 0) {
-  df_seacr <- left_join(peakW_seacr, samplesheet) %>%
-    select(sampleID, condition, width)
-
-  p3 <- df_seacr %>%
-    ggplot(aes(x = width, fill = condition)) +
-    geom_histogram(bins = 50, alpha = 0.7) +
-    scale_fill_viridis_d(begin = 0.1, end = 0.8, option = "magma") +
-    scale_x_log10() +
-    facet_wrap(~condition, scales = "free_y") +
-    theme_minimal() +
-    labs(title = "SEACR Peak Width Distribution",
-         x = "Peak Width (bp)", y = "Count")
-
-  ggplotly(p3)
-}
+# Load fragment data from Snakemake inputs
+frag_files <- as.character(snakemake@input[["fragments"]]) |> map_chr(get_abs_path)
+frag_data <- frag_files |>
+  map_dfr(~ {
+    tryCatch(process_fragment_file(.x), error = function(e) tibble())
+  })
+frag_plot <- create_fragment_plot(frag_data)
+ggplotly(frag_plot) |>
+  layout(
+    title = list(text = "Fragment Length Distribution", font = list(size = 16)),
+    showlegend = TRUE,
+    legend = list(
+      orientation = "h",
+      x = 0.5,
+      xanchor = "center"
+    )
+  )
 ```
 
-### Peak Width Distribution - MACS3
-
-```{r}
-# Reconstruct peak width data for MACS3
-suffix_macs <- "_peaks.narrowPeak"
-peakW_macs <- tibble()
-
-for (relname in as.character(snakemake@input[["macs3_peaks"]])) {
-  absname <- get_abs_path(relname)
-  if (file.exists(absname) && file.size(absname) > 0) {
-    filename <- basename(absname)
-    sample <- str_split(filename, suffix_macs)[[1]][1]
-    peakInfo <- read.table(absname, header = FALSE, fill = TRUE) %>%
-      mutate(width = abs(V3 - V2))
-    peakW_macs <- tibble(width = peakInfo$width, sampleID = sample) %>%
-      bind_rows(peakW_macs)
-  }
-}
-
-if (nrow(peakW_macs) > 0) {
-  df_macs <- left_join(peakW_macs, samplesheet) %>%
-    select(sampleID, condition, width)
-
-  p4 <- df_macs %>%
-    ggplot(aes(x = width, fill = condition)) +
-    geom_histogram(bins = 50, alpha = 0.7) +
-    scale_fill_viridis_d(begin = 0.1, end = 0.8, option = "magma") +
-    scale_x_log10() +
-    facet_wrap(~condition, scales = "free_y") +
-    theme_minimal() +
-    labs(title = "MACS3 Peak Width Distribution",
-         x = "Peak Width (bp)", y = "Count")
-
-  ggplotly(p4)
-}
-```
-
-Column {data-width=500}
------------------------------------------------------------------------
-
-### Peak Width Statistics
-
-```{r}
-width_stats_combined <- bind_rows(
-  seacr_width %>% mutate(method = "SEACR"),
-  macs3_width %>% mutate(method = "MACS3")
-) %>%
-  select(sampleID, condition, method, median_width, mean_width, pct_narrow, pct_broad)
-
-DT::datatable(width_stats_combined,
-              options = list(pageLength = 15, autoWidth = TRUE),
-              colnames = c("Sample", "Condition", "Method", "Median Width",
-                          "Mean Width", "% Narrow", "% Broad"),
-              caption = "Peak width statistics by sample and method") %>%
-  formatRound(columns = c("median_width", "mean_width"), digits = 1) %>%
-  formatRound(columns = c("pct_narrow", "pct_broad"), digits = 2)
-```
-
-### Peak Categories Comparison
-
-```{r}
-peak_categories <- width_stats_combined %>%
-  select(sampleID, condition, method, pct_narrow, pct_broad) %>%
-  pivot_longer(cols = c(pct_narrow, pct_broad),
-               names_to = "category", values_to = "percentage") %>%
-  mutate(category = case_when(
-    category == "pct_narrow" ~ "Narrow (≤500bp)",
-    category == "pct_broad" ~ "Broad (>2000bp)"
-  ))
-
-p5 <- peak_categories %>%
-  ggplot(aes(x = sampleID, y = percentage, fill = category)) +
-  geom_bar(stat = "identity", position = "dodge", alpha = 0.8) +
-  scale_fill_viridis_d(begin = 0.2, end = 0.8, option = "plasma") +
-  facet_wrap(~method, scales = "free_x") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  labs(title = "Peak Category Distribution",
-       x = "Sample", y = "Percentage (%)",
-       fill = "Peak Category")
-
-ggplotly(p5, height = 500)
-```
-
-Quality Control {data-icon="fa-check-circle"}
+Coverage Similarity{data-icon="fa-project-diagram"}
 =======================================================================
 
-Column {data-width=600}
------------------------------------------------------------------------
-
-### Reproducibility Analysis
+### Sample Coverage Correlation Matrix
 
 ```{r}
-reprod_combined <- bind_rows(
-  seacr_reprod %>% mutate(method = "SEACR"),
-  macs3_reprod %>% mutate(method = "MACS3")
-)
+process_coverage_files <- function(coverage_files) {
+  if (length(coverage_files) == 0) return(tibble())
 
-p6 <- reprod_combined %>%
-  ggplot(aes(x = sampleID, y = peakReprodRate, fill = condition)) +
-  geom_bar(stat = "identity", alpha = 0.8) +
-  scale_fill_viridis_d(begin = 0.1, end = 0.8, option = "magma") +
-  facet_wrap(~method, scales = "free_x") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  labs(title = "Peak Reproducibility Rate",
-       x = "Sample", y = "Reproducibility Rate (%)",
-       fill = "Condition")
+  coverage_list <- coverage_files |>
+    map(~ {
+      sample_name <- str_remove(basename(.x), ".bin.bed")
+      tryCatch({
+        read_delim(.x, col_names = c("chrom", "start", "coverage"),
+                  show_col_types = FALSE, delim = "\t") |>
+          mutate(bin = paste(chrom, start, sep = "_")) |>
+          select(chrom, bin, !!sample_name := coverage)
+      }, error = function(e) tibble())
+    })
 
-ggplotly(p6)
-```
+  coverage_list <- coverage_list[map_lgl(coverage_list, ~ nrow(.x) > 0)]
+  if (length(coverage_list) == 0) return(tibble())
 
-### Fragment Length Distribution
+  coverage_list |> purrr::reduce(full_join, by = c("chrom", "bin"))
+}
 
-```{r}
-# Read fragment length data
-fragment_files <- as.character(snakemake@input[["fragments"]])
-fragment_data <- tibble()
+coverage_files <- as.character(snakemake@input[["coverage_bins"]]) |> map_chr(get_abs_path)
+coverage_data <- process_coverage_files(coverage_files)
 
-for (rel_file in fragment_files) {
-  abs_file <- get_abs_path(rel_file)
-  if (file.exists(abs_file)) {
-    sample <- str_extract(basename(abs_file), "^[^.]+")
-    frags <- read_tsv(abs_file, col_names = c("length", "count"))
-    fragment_data <- bind_rows(fragment_data,
-                              frags %>% mutate(sampleID = sample))
+if (nrow(coverage_data) > 0) {
+  # Sample data if too large
+  if (nrow(coverage_data) > 100000) {
+    coverage_data <- coverage_data |> sample_n(50000)
   }
-}
 
-if (nrow(fragment_data) > 0) {
-  fragment_data <- fragment_data %>%
-    left_join(samplesheet, by = "sampleID") %>%
-    filter(length <= 1000)  # Focus on relevant range
+  # Calculate correlation matrix
+  correlation_matrix <- coverage_data |>
+    select(-c("chrom", "bin")) |>
+    mutate(across(everything(), ~ log2(.x + 1))) |>
+    cor(use = "complete.obs")
 
-  p7 <- fragment_data %>%
-    ggplot(aes(x = length, y = count, color = condition)) +
-    geom_line(alpha = 0.7) +
-    scale_color_viridis_d(begin = 0.1, end = 0.8, option = "plasma") +
-    facet_wrap(~sampleID, scales = "free_y") +
-    theme_minimal() +
-    labs(title = "Fragment Length Distribution",
-         x = "Fragment Length (bp)", y = "Count",
-         color = "Condition")
+  # Perform hierarchical clustering
+  dist_matrix <- as.dist(1 - correlation_matrix)
+  hc <- hclust(dist_matrix, method = "complete")
+  sample_order <- colnames(correlation_matrix)[hc$order]
 
-  ggplotly(p7)
-}
+  # Reorder matrix
+  correlation_matrix_ordered <- correlation_matrix[sample_order, sample_order]
+
+  # Create plotly heatmap directly - full page size
+  plot_ly(
+    z = correlation_matrix_ordered,
+    x = colnames(correlation_matrix_ordered),
+    y = rownames(correlation_matrix_ordered),
+    type = "heatmap",
+    colorscale = list(c(0, "midnightblue"), c(0.5, "white"), c(1, "darkred")),
+    showscale = TRUE,
+    hovertemplate = "Sample 1: %{y}<br>Sample 2: %{x}<br>Correlation: %{z:.3f}<extra></extra>"
+  ) |>
+    layout(
+      title = list(text = "Sample Coverage Similarity", font = list(size = 18)),
+      xaxis = list(
+        title = "",
+        tickangle = 90,
+        tickfont = list(size = 12),
+        automargin = TRUE
+      ),
+      yaxis = list(
+        title = "",
+        tickfont = list(size = 12),
+        automargin = TRUE
+      ),
+      height = 1600,
+      width = 1600,  
+      autosize = FALSE,
+      margin = list(l = 200, r = 100, t = 100, b = 200)
+    )
+} else {
+  cat("No coverage data available\n")
+  plot_ly() |>
+    add_annotations(text = "No coverage data available",
+                   x = 0.5, y = 0.5, showarrow = FALSE)
+} 
 ```
+
+
+SEACR {data-icon="fa-chart-area"}
+=======================================================================
 
 Column {data-width=400}
 -----------------------------------------------------------------------
 
-### TSS Enrichment Scores {data-height=400}
+### Number of peaks (by condition)
 
 ```{r}
-if (!is.null(tss_enrichment)) {
-  tss_with_condition <- tss_enrichment %>%
-    left_join(samplesheet, by = c("Sample" = "sampleID"))
-
-  p8 <- tss_with_condition %>%
-    ggplot(aes(x = condition, y = TSS_Enrichment, fill = condition)) +
-    geom_boxplot(alpha = 0.7) +
-    geom_jitter(width = 0.2) +
-    scale_fill_viridis_d(begin = 0.1, end = 0.8, option = "plasma") +
-    theme_minimal() +
-    labs(title = "TSS Enrichment Scores",
-         x = "Condition", y = "TSS Enrichment Score",
-         fill = "Condition")
-
-  ggplotly(p8)
+if (nrow(seacr_num) > 0) {
+  seacr_peak_plot <- seacr_num |>
+      ggplot(aes(x = condition, y = peakN, sampleID = sampleID)) +
+      geom_jitter(width = 0.2, alpha = 0.7, size = 2) +
+      simple_theme() +
+      theme(axis.text.x = element_text(angle=90)) + 
+      labs(title = paste("SEACR", "Peak Counts"), x = "Condition", y = "Peaks")
+  ggplotly(seacr_peak_plot, tooltip = c("sampleID", "condition", "peakN")) |>
+    layout(title = list(text = "SEACR Peak Counts", font = list(size = 16)))
 } else {
-  htmltools::div(
-    style = "text-align: center; padding: 50px;",
-    htmltools::h4("TSS enrichment analysis not performed"),
-    htmltools::p("Add a GTF file to config.json to enable TSS enrichment calculation")
-  )
+  div(class = "alert alert-warning", "No SEACR peak data")
 }
 ```
 
-### Quality Metrics Summary {data-height=600}
+### Fraction in Peaks (by condition)
 
 ```{r}
-qc_metrics <- consolidated %>%
-  select(sampleID, condition, seacr_FRiP, macs3_FRiP,
-         seacr_median_width, macs3_median_width,
-         seacr_pct_narrow, macs3_pct_narrow)
-
-if (!is.null(tss_enrichment)) {
-  qc_metrics <- qc_metrics %>%
-    left_join(tss_enrichment, by = c("sampleID" = "Sample"))
+if (nrow(seacr_frip) > 0) {
+  seacr_frip_plot <- seacr_frip |>
+      ggplot(aes(x = condition, y = FRiP, sampleID = sampleID)) +
+      geom_jitter(width = 0.2, alpha = 0.7, size = 2) +
+      simple_theme() +
+      theme(axis.text.x = element_text(angle=90)) + 
+      labs(title = paste("SEACR", "FRiP"), x = "Condition", y = "FRiP")
+  ggplotly(seacr_frip_plot, tooltip = c("sampleID", "condition", "FRiP")) |>
+    layout(title = list(text = "SEACR FRiP", font = list(size = 16)))
+} else {
+  div(class = "alert alert-warning", "No SEACR FRiP data")
 }
-
-DT::datatable(qc_metrics,
-              options = list(pageLength = 10, autoWidth = TRUE, scrollX = TRUE),
-              caption = "Comprehensive quality control metrics") %>%
-  formatRound(columns = c("seacr_FRiP", "macs3_FRiP"), digits = 2) %>%
-  formatRound(columns = c("seacr_median_width", "macs3_median_width"), digits = 1) %>%
-  formatRound(columns = c("seacr_pct_narrow", "macs3_pct_narrow"), digits = 2)
 ```
 
-Method Comparison {data-icon="fa-balance-scale"}
-=======================================================================
-
-Column {.tabset}
+Column {data-width=600}
 -----------------------------------------------------------------------
 
-### SEACR vs MACS3 Peak Counts
+### Peak Width Distribution (by condition)
 
 ```{r}
-p9 <- consolidated %>%
-  ggplot(aes(x = seacr_peakN, y = macs3_peakN, color = condition)) +
-  geom_point(size = 3, alpha = 0.8) +
-  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray") +
-  scale_color_viridis_d(begin = 0.1, end = 0.8, option = "plasma") +
-  theme_minimal() +
-  labs(title = "SEACR vs MACS3 Peak Count Correlation",
-       x = "SEACR Peak Count", y = "MACS3 Peak Count",
-       color = "Condition")
+process_seacr_peak_width_file <- function(file_path, file_suffix) {
+  sample_id <- str_remove(basename(file_path), file_suffix)
+  read_delim(file_path, col_names = c("chrom", "start", "end", "total_signal", "max_signal_pos", "region"), show_col_types = FALSE) |>
+    mutate(width = abs(end - start), sample_id = sample_id) |>
+    select(width, sample_id)
+}
 
-ggplotly(p9)
+# Function to create peak width distribution plot
+create_peak_width_plot <- function(peak_width_data, sample_data, method_name, bins = hist_bins) {
+  if (nrow(peak_width_data) == 0) {
+    return(ggplot() + labs(title = glue::glue("No {method_name} peak width data available")))
+  }
+
+  plot_data <- peak_width_data |>
+    left_join(sample_data, by = c("sample_id" = "sampleID")) |>
+    filter(!is.na(condition)) |>
+    select(sample_id, condition, width)
+
+  plot_data |>
+    ggplot(aes(x = width, fill = sample_id)) +
+    geom_histogram(bins = bins, alpha = 0.7) +
+    scale_fill_viridis_d(begin = 0.1, end = 0.8, option = "magma") +
+    scale_x_log10(labels = scales::label_number(scale_cut = scales::cut_short_scale())) +
+    facet_wrap(~condition, scales = "free_y") +
+    simple_theme() +
+    labs(
+      title = glue::glue("{method_name} Peak Width Distribution"),
+      x = "Peak Width (bp)",
+      y = "Count"
+    ) +
+    theme(legend.position = "none") +
+    guides(fill = "none")
+}
+
+seacr_peak_files <- as.character(snakemake@input[["seacr_peaks"]]) |> map_chr(get_abs_path)
+seacr_width_data <- seacr_peak_files |> map_dfr(~ process_seacr_peak_width_file(.x, ".peaks.stringent.bed"))
+seacr_width_plot <- create_peak_width_plot(seacr_width_data, samplesheet, "SEACR")
+ggplotly(seacr_width_plot) |>
+  layout(title = list(text = "SEACR Peak Width Distribution", font = list(size = 16)))
 ```
 
-### SEACR vs MACS3 FRiP Scores
+### Peaks Width Category
 
 ```{r}
-p10 <- consolidated %>%
-  ggplot(aes(x = seacr_FRiP, y = macs3_FRiP, color = condition)) +
-  geom_point(size = 3, alpha = 0.8) +
-  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray") +
-  scale_color_viridis_d(begin = 0.1, end = 0.8, option = "plasma") +
-  theme_minimal() +
-  labs(title = "SEACR vs MACS3 FRiP Score Correlation",
-       x = "SEACR FRiP Score (%)", y = "MACS3 FRiP Score (%)",
-       color = "Condition")
-
-ggplotly(p10)
+if (nrow(seacr_width) > 0) {
+  seacr_width_cat_plot <- seacr_width |>
+      select(sampleID, condition, pct_narrow, pct_broad) |>
+      pivot_longer(cols = c(pct_narrow, pct_broad), names_to = "category", values_to = "percentage") |>
+      mutate(category = ifelse(category == "pct_narrow", "Narrow", "Broad")) |>
+      ggplot(aes(x = sampleID, y = percentage, fill = category)) +
+      geom_col(position = "dodge", alpha = 0.8) +
+      scale_fill_viridis_d() +
+      simple_theme() +
+      theme(axis.text.x = element_blank()) +
+      labs(title = paste("SEACR", "Width Categories"), x = "", y = "Percentage")
+  ggplotly(seacr_width_cat_plot) |>
+    layout(
+      title = list(text = "SEACR Width Categories", font = list(size = 16)),
+      margin = list(l = 60, r = 40, t = 60, b = 100)
+    )
+} else {
+  div(class = "alert alert-warning", "No SEACR width data")
+}
 ```
 
-### Peak Width Comparison
+```{r}
+# Simplified peak similarity calculation
+calculate_peak_similarity_from_files <- function(files, file_suffix, method_name) {
+  if (length(files) < 2) return(tibble())
+
+  combinations <- combn(files, 2, simplify = FALSE)
+
+  map_dfr(combinations, ~ {
+    tryCatch({
+      peaks1 <- read_delim(.x[1], col_names = c("chr", "start", "end"), show_col_types = FALSE, col_select = 1:3)
+      peaks2 <- read_delim(.x[2], col_names = c("chr", "start", "end"), show_col_types = FALSE, col_select = 1:3)
+
+      if (nrow(peaks1) == 0 || nrow(peaks2) == 0) return(tibble())
+
+      gr1 <- GRanges(peaks1$chr, IRanges(peaks1$start, peaks1$end))
+      gr2 <- GRanges(peaks2$chr, IRanges(peaks2$start, peaks2$end))
+
+      tibble(
+        sample1 = str_remove(basename(.x[1]), file_suffix),
+        sample2 = str_remove(basename(.x[2]), file_suffix),
+        unionset = length(union(gr1, gr2)),
+        overlapset = length(intersect(gr1, gr2))
+      )
+    }, error = function(e) tibble())
+  })
+}
+
+# Function to create peak similarity heatmap with optimized layout and long name handling
+create_peak_similarity_plot <- function(similarity_data, method_name) {
+  if (nrow(similarity_data) == 0) {
+    return(ggplot() + labs(title = glue::glue("No {method_name} similarity data available")))
+  }
+
+  plot_data <- similarity_data |> mutate(jaccard = overlapset / unionset) |> distinct()
+
+  return(plot_data |>
+    ggplot(aes(x = sample1, y = sample2, fill = jaccard)) +
+    geom_tile(color = "white", linewidth = 0.1) +
+    scale_fill_viridis_c(begin = 0.1, end = 0.8, option = "magma",
+                        name = "Jaccard\nIndex",
+                        labels = scales::percent_format(accuracy = 1)) +
+    simple_theme() +
+    theme(
+      axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 8),
+      axis.text.y = element_text(size = 8),
+      plot.margin = margin(15, 15, 25, 15),  # Extra margin for rotated text
+      panel.grid = element_blank(),  # Remove grid for cleaner heatmap
+      axis.ticks = element_blank()   # Remove ticks for cleaner look
+    ) +
+    labs(
+      title = glue::glue("{method_name} Peak Similarity Matrix"),
+      subtitle = glue::glue("Jaccard index for samples: overlap/union of peak sets"),
+      x = "",
+      y = ""
+    ) +
+    coord_equal()  # Ensure square tiles
+  )
+}
+
+# Unified function to create similarity matrix plot
+create_similarity_matrix_plot <- function(similarity_data, method_name) {
+  if (nrow(similarity_data) == 0) {
+    return(plot_ly() |>
+      add_annotations(text = paste("No", method_name, "peak similarity data available"),
+                     x = 0.5, y = 0.5, showarrow = FALSE))
+  }
+
+  # Calculate Jaccard similarities
+  jaccard_data <- similarity_data |>
+    mutate(jaccard = overlapset / unionset) |>
+    select(sample1, sample2, jaccard)
+
+  # Create symmetric matrix for all sample pairs
+  similarity_swapped <- tibble(sample1 = jaccard_data$sample2,
+                              sample2 = jaccard_data$sample1,
+                              jaccard = jaccard_data$jaccard)
+  similarity_same <- tibble(sample1 = unique(c(jaccard_data$sample1, jaccard_data$sample2))) |>
+    mutate(sample2 = sample1, jaccard = 1)
+
+  complete_data <- bind_rows(jaccard_data, similarity_swapped) |>
+    bind_rows(similarity_same) |>
+    distinct()
+
+  # Convert to matrix format
+  samples <- unique(c(complete_data$sample1, complete_data$sample2))
+  jaccard_matrix <- matrix(0, nrow = length(samples), ncol = length(samples),
+                          dimnames = list(samples, samples))
+
+  for (i in 1:nrow(complete_data)) {
+    row_sample <- complete_data$sample1[i]
+    col_sample <- complete_data$sample2[i]
+    jaccard_matrix[row_sample, col_sample] <- complete_data$jaccard[i]
+  }
+
+  # Perform hierarchical clustering
+  dist_matrix <- as.dist(1 - jaccard_matrix)
+  hc <- hclust(dist_matrix, method = "complete")
+  sample_order <- colnames(jaccard_matrix)[hc$order]
+
+  # Reorder matrix
+  jaccard_matrix_ordered <- jaccard_matrix[sample_order, sample_order]
+
+  # Create plotly heatmap
+  plot_ly(
+    z = jaccard_matrix_ordered,
+    x = colnames(jaccard_matrix_ordered),
+    y = rownames(jaccard_matrix_ordered),
+    type = "heatmap",
+    colorscale = list(c(0, "midnightblue"), c(0.5, "white"), c(1, "darkred")),
+    showscale = TRUE,
+    hovertemplate = "Sample 1: %{y}<br>Sample 2: %{x}<br>Jaccard Index: %{z:.3f}<extra></extra>"
+  ) |>
+    layout(
+      title = list(text = paste(method_name, "Peak Similarity Matrix"), font = list(size = 18)),
+      xaxis = list(
+        title = "",
+        tickangle = 90,
+        tickfont = list(size = 12),
+        automargin = TRUE
+      ),
+      yaxis = list(
+        title = "",
+        tickfont = list(size = 12),
+        automargin = TRUE
+      ),
+      height = 1600,
+      width = 1600,
+      autosize = FALSE,
+      margin = list(l = 200, r = 100, t = 100, b = 200)
+    )
+}
+```
+
+SEACR Peaks {data-icon="fa-sitemap"}
+=======================================================================
 
 ```{r}
-p11 <- consolidated %>%
-  ggplot(aes(x = seacr_median_width, y = macs3_median_width, color = condition)) +
-  geom_point(size = 3, alpha = 0.8) +
-  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray") +
-  scale_color_viridis_d(begin = 0.1, end = 0.8, option = "plasma") +
-  theme_minimal() +
-  labs(title = "SEACR vs MACS3 Median Peak Width",
-       x = "SEACR Median Width (bp)", y = "MACS3 Median Width (bp)",
-       color = "Condition")
+seacr_similarity <- calculate_peak_similarity_from_files(seacr_peak_files, ".peaks.stringent.bed", "SEACR")
+create_similarity_matrix_plot(seacr_similarity, "SEACR")
+```
 
-ggplotly(p11)
+MACS3 {data-icon="fa-chart-line"}
+=======================================================================
+
+Column {data-width=400}
+-----------------------------------------------------------------------
+
+### Number of peaks (by condition)
+
+```{r}
+if (nrow(macs3_num) > 0) {
+  macs3_peak_plot <- macs3_num |>
+      ggplot(aes(x = condition, y = peakN, sampleID = sampleID)) +
+      geom_jitter(width = 0.2, alpha = 0.7, size = 2) +
+      simple_theme() +
+      theme(axis.text.x = element_text(angle=90)) + 
+      labs(title = paste("MACS3", "Peak Counts"), x = "Condition", y = "Peaks")
+  ggplotly(macs3_peak_plot, tooltip = c("sampleID", "condition", "peakN")) |>
+    layout(title = list(text = "MACS3 Peak Counts", font = list(size = 16)))
+} else {
+  div(class = "alert alert-warning", "No MACS3 peak data")
+}
+```
+
+### Fraction in Peaks (by condition)
+
+```{r}
+if (nrow(macs3_frip) > 0) {
+  macs3_frip_plot <- macs3_frip |>
+      ggplot(aes(x = condition, y = FRiP, sampleID = sampleID)) +
+      geom_jitter(width = 0.2, alpha = 0.7, size = 2) +
+      simple_theme() +
+      theme(axis.text.x = element_text(angle=90)) + 
+      labs(title = paste("MACS3", "FRiP"), x = "Condition", y = "FRiP")
+  ggplotly(macs3_frip_plot, tooltip = c("sampleID", "condition", "FRiP")) |>
+    layout(title = list(text = "MACS3 FRiP", font = list(size = 16)))
+} else {
+  div(class = "alert alert-warning", "No MACS3 FRiP data")
+}
+```
+
+Column {data-width=600}
+-----------------------------------------------------------------------
+
+### Peak Width Distribution (by condition)
+
+```{r}
+process_macs3_peak_width_file <- function(file_path, file_suffix) {
+  sample_id <- str_remove(basename(file_path), file_suffix)
+  read_delim(file_path, col_names = c("chrom", "start", "end", "name", "score", "strand", "signal", "pvalue", "qvalue", "peak"), show_col_types = FALSE) |>
+    mutate(width = abs(end - start), sample_id = sample_id) |>
+    select(width, sample_id)
+}
+
+macs3_peak_files <- as.character(snakemake@input[["macs3_peaks"]]) |> map_chr(get_abs_path)
+macs3_width_data <- macs3_peak_files |> map_dfr(~ process_macs3_peak_width_file(.x, "_peaks.narrowPeak"))
+macs3_width_plot <- create_peak_width_plot(macs3_width_data, samplesheet, "MACS3")
+ggplotly(macs3_width_plot) |>
+  layout(title = list(text = "MACS3 Peak Width Distribution", font = list(size = 16)))
+```
+
+### Peaks Width Category
+
+```{r}
+if (nrow(macs3_width) > 0) {
+  macs3_width_cat_plot <- macs3_width |>
+      select(sampleID, condition, pct_narrow, pct_broad) |>
+      pivot_longer(cols = c(pct_narrow, pct_broad), names_to = "category", values_to = "percentage") |>
+      mutate(category = ifelse(category == "pct_narrow", "Narrow", "Broad")) |>
+      ggplot(aes(x = sampleID, y = percentage, fill = category)) +
+      geom_col(position = "dodge", alpha = 0.8) +
+      scale_fill_viridis_d() +
+      simple_theme() +
+      theme(axis.text.x = element_blank()) +
+      labs(title = paste("MACS3", "Width Categories"), x = "", y = "Percentage")
+  ggplotly(macs3_width_cat_plot) |>
+    layout(
+      title = list(text = "MACS3 Width Categories", font = list(size = 16)),
+      margin = list(l = 60, r = 40, t = 60, b = 100)
+    )
+} else {
+  div(class = "alert alert-warning", "No MACS3 width data")
+}
+```
+
+MACS3 Peaks {data-icon="fa-network-wired"}
+=======================================================================
+
+```{r}
+macs3_similarity <- calculate_peak_similarity_from_files(macs3_peak_files, "_peaks.narrowPeak", "MACS3")
+create_similarity_matrix_plot(macs3_similarity, "MACS3")
 ```

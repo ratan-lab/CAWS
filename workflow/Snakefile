@@ -51,12 +51,10 @@ rule all:
         expand("qc/{sample}_1", sample=SAMPLES),
         expand("qc/{sample}_2", sample=SAMPLES),
         "stats/stats.txt",
-        "stats/fragments.pdf",
-        "stats/replicates.pdf",
         "stats/peaks_consolidated.txt",
-        "stats/seacr/peaks_fig.pdf",
-        "stats/macs3/peaks_fig.pdf",
         expand("stats/seacr/{sample}.heatmap.png", sample=EXPERIMENT),
+        expand("stats/seacr/{sample}_gc_content.txt", sample=EXPERIMENT),
+        expand("stats/macs3/{sample}_gc_content.txt", sample=EXPERIMENT),
         "stats/tss_enrichment.txt" if config["gtf_file"] else [],
         "reports/cutntag_analysis_report.html",
 
@@ -245,17 +243,6 @@ rule fragment_size:
         """
 
 
-rule viz_fragment_size:
-    input:
-        expand("alignments/{sample}.fraglengths.txt", sample=SAMPLES),
-    output:
-        report("stats/fragments.pdf", caption="report/fragments.rst"),
-    log:
-        "logs/viz_fragment_size/plot.log",
-    conda:
-        "envs/R.yaml"
-    script:
-        "scripts/viz_fragment_size.R"
 
 
 # we filter all reads overlapping the blacklist, remove non-primary and sex
@@ -324,17 +311,52 @@ rule bam_to_bed:
         |  sort -k1,1V -k2,2n  > {output.binbed}
         """
 
-rule assess_replicates:
+rule calculate_seacr_peak_gc:
     input:
-        expand("bedalignments/{sample}.bin.bed", sample=SAMPLES),
+        peaks="peaks/seacr/{sample}.peaks.stringent.bed",
+        fasta=config["reference_fa"],
     output:
-        report("stats/replicates.pdf", caption="report/replicates.rst"),
+        gc_stats="stats/seacr/{sample}_gc_content.txt",
     log:
-        "logs/assess_replicates/plot.log",
+        "logs/calculate_peak_gc/seacr_{sample}.log",
     conda:
-        "envs/R.yaml"
-    script:
-        "scripts/viz_replicates.R"
+        "envs/bedtools.yaml"
+    shell:
+        """
+        if [ -s {input.peaks} ]; then
+            bedtools nuc -fi {input.fasta} -bed {input.peaks} | \
+            awk 'NR>1 {{print $5}}' | \
+            sort -n | \
+            awk '{{a[NR]=$1}} END {{n=NR; if(n==0) print "{wildcards.sample}", 0; else if(n%2==1) print "{wildcards.sample}", a[(n+1)/2]; else print "{wildcards.sample}", (a[n/2]+a[n/2+1])/2}}' \
+            > {output.gc_stats}
+        else
+            echo "{wildcards.sample} 0" > {output.gc_stats}
+        fi
+        """
+
+rule calculate_macs_peak_gc:
+    input:
+        peaks="peaks/macs3/{sample}_peaks.narrowPeak",
+        fasta=config["reference_fa"],
+    output:
+        gc_stats="stats/macs3/{sample}_gc_content.txt",
+    log:
+        "logs/calculate_peak_gc/macs3_{sample}.log",
+    conda:
+        "envs/bedtools.yaml"
+    shell:
+        """
+        if [ -s {input.peaks} ]; then
+            bedtools nuc -fi {input.fasta} -bed {input.peaks} | \
+            awk 'NR>1 {{print $5}}' | \
+            sort -n | \
+            awk '{{a[NR]=$1}} END {{n=NR; if(n==0) print "{wildcards.sample}", 0; else if(n%2==1) print "{wildcards.sample}", a[(n+1)/2]; else print "{wildcards.sample}", (a[n/2]+a[n/2+1])/2}}' \
+            > {output.gc_stats}
+        else
+            echo "{wildcards.sample} 0" > {output.gc_stats}
+        fi
+        """
+
 
 rule call_seacr_peaks:
     input:
@@ -404,13 +426,13 @@ rule assess_peaks:
     input:
         peaks=expand("peaks/seacr/{sample}.peaks.stringent.bed", sample=EXPERIMENT),
         stats="stats/stats.txt",
+        gc_files=expand("stats/seacr/{sample}_gc_content.txt", sample=EXPERIMENT),
     output:
         peakN="stats/seacr/peaks_num.txt",
         peakR="stats/seacr/peaks_reproducibility.txt",
         peakF="stats/seacr/peaks_frip.txt",
         peakW="stats/seacr/peaks_width_stats.txt",
-        fig="stats/seacr/peaks_fig.pdf",
-        figW="stats/seacr/peaks_width_analysis.pdf",
+        peakG="stats/seacr/peaks_gc_content.txt",
     log:
         "logs/assess_seacr_peaks/job.log",
     conda:
@@ -426,13 +448,13 @@ use rule assess_peaks as assess_macs_peaks with:
     input:
         peaks=expand("peaks/macs3/{sample}_peaks.narrowPeak", sample=EXPERIMENT),
         stats="stats/stats.txt",
+        gc_files=expand("stats/macs3/{sample}_gc_content.txt", sample=EXPERIMENT),
     output:
         peakN="stats/macs3/peaks_num.txt",
         peakR="stats/macs3/peaks_reproducibility.txt",
         peakF="stats/macs3/peaks_frip.txt",
         peakW="stats/macs3/peaks_width_stats.txt",
-        fig="stats/macs3/peaks_fig.pdf",
-        figW="stats/macs3/peaks_width_analysis.pdf",
+        peakG="stats/macs3/peaks_gc_content.txt",
     log:
         "logs/assess_macs_peaks/job.log",
     params:
@@ -446,10 +468,12 @@ rule consolidate_stats:
         seacr_reprod="stats/seacr/peaks_reproducibility.txt",
         seacr_frip="stats/seacr/peaks_frip.txt",
         seacr_width="stats/seacr/peaks_width_stats.txt",
+        seacr_gc="stats/seacr/peaks_gc_content.txt",
         macs3_num="stats/macs3/peaks_num.txt",
         macs3_reprod="stats/macs3/peaks_reproducibility.txt",
         macs3_frip="stats/macs3/peaks_frip.txt",
         macs3_width="stats/macs3/peaks_width_stats.txt",
+        macs3_gc="stats/macs3/peaks_gc_content.txt",
     output:
         consolidated="stats/peaks_consolidated.txt",
     log:
@@ -571,13 +595,16 @@ rule generate_html_report:
         seacr_reprod="stats/seacr/peaks_reproducibility.txt",
         seacr_frip="stats/seacr/peaks_frip.txt",
         seacr_width="stats/seacr/peaks_width_stats.txt",
+        seacr_gc="stats/seacr/peaks_gc_content.txt",
         macs3_num="stats/macs3/peaks_num.txt",
         macs3_reprod="stats/macs3/peaks_reproducibility.txt",
         macs3_frip="stats/macs3/peaks_frip.txt",
         macs3_width="stats/macs3/peaks_width_stats.txt",
+        macs3_gc="stats/macs3/peaks_gc_content.txt",
         seacr_peaks=expand("peaks/seacr/{sample}.peaks.stringent.bed", sample=EXPERIMENT),
         macs3_peaks=expand("peaks/macs3/{sample}_peaks.narrowPeak", sample=EXPERIMENT),
         fragments=expand("alignments/{sample}.fraglengths.txt", sample=SAMPLES),
+        coverage_bins=expand("bedalignments/{sample}.bin.bed", sample=SAMPLES),
         tss_enrichment="stats/tss_enrichment.txt" if config["gtf_file"] else [],
     output:
         html_report="reports/cutntag_analysis_report.html",
