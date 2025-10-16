@@ -110,7 +110,7 @@ for (absname in as.character(snakemake@input[["peaks"]])) {
     peak.gr = GRanges(seqnames = peakRes$V1, IRanges(start = peakRes$V2, end = peakRes$V3), strand = "*")
     bamFile = paste0(folder, "/", sample, ".sorted.qflt.bam")
     fragment_counts = getCounts(bamFile, peak.gr, paired = TRUE, by_rg = FALSE, format = "bam")
-    inPeakN = counts(fragment_counts)[,1] |> sum
+    inPeakN = counts(fragment_counts)[,1] |> sum()
     peakF = tibble(inPeakN=inPeakN, sampleID=sample) |> bind_rows(peakF)
 }
 

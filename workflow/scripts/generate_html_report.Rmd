@@ -19,6 +19,7 @@ library(GenomicRanges)
 library(fs)
 library(glue)
 library(htmltools)
+library(data.table)
 
 fragment_length_xlim <- c(0,500)
 hist_bins <- 50
@@ -316,7 +317,8 @@ process_coverage_files <- function(coverage_files) {
   coverage_list <- coverage_list[map_lgl(coverage_list, ~ nrow(.x) > 0)]
   if (length(coverage_list) == 0) return(tibble())
 
-  coverage_list |> purrr::reduce(full_join, by = c("chrom", "bin"))
+  coverage_list <- lapply(coverage_list, as.data.table)
+  Reduce(function(x, y) merge(x, y, by = c("chrom", "bin"), all = TRUE), coverage_list)
 }
 
 coverage_files <- as.character(snakemake@input[["coverage_bins"]]) |> map_chr(get_abs_path)
@@ -447,7 +449,7 @@ create_peak_width_plot <- function(peak_width_data, sample_data, method_name, bi
     ggplot(aes(x = width, fill = sample_id)) +
     geom_histogram(bins = bins, alpha = 0.7) +
     scale_fill_viridis_d(begin = 0.1, end = 0.8, option = "magma") +
-    scale_x_log10(labels = scales::label_number(scale_cut = scales::cut_short_scale())) +
+    scale_x_continuous(trans = "log10", labels = ~format(., scientific = FALSE)) +
     facet_wrap(~condition, scales = "free_y") +
     simple_theme() +
     labs(
