@@ -8,58 +8,27 @@ import sys
 def parse_deeptools_matrix(matrix_file):
     """Parse deepTools computeMatrix output"""
     with gzip.open(matrix_file, 'rt') as f:
-        lines = f.readlines()
+        # Parse JSON metadata from first line
+        metadata_line = f.readline().strip()
+        metadata = json.loads(metadata_line[1:])  # Remove '@' prefix
 
-    samples = []
-    matrices = []
-    data_start = False
+        # Extract sample information
+        samples = metadata['sample_labels']
 
-    for line in lines:
-        if line.startswith('@') and 'sample_labels' in line:
-            # Extract sample names from the JSON-like format
-            # Example line: @sample_labels ["sample1","sample2","sample3"]
-            try:
-                # Find the JSON array in the line
-                start_bracket = line.find('[')
-                end_bracket = line.rfind(']')
-                if start_bracket != -1 and end_bracket != -1:
-                    samples_str = line[start_bracket:end_bracket+1]
-                    samples = json.loads(samples_str)
-                else:
-                    # Fallback: try to extract from quoted strings
-                    import re
-                    quoted_samples = re.findall(r'"([^"]+)"', line)
-                    samples = quoted_samples if quoted_samples else ["unknown_sample"]
-            except (json.JSONDecodeError, ValueError) as e:
-                print(f"Warning: Could not parse sample labels from line: {line.strip()}")
-                print(f"Error: {e}")
-                # Use fallback sample names
-                samples = [f"sample_{i+1}" for i in range(1)]  # Will be adjusted later based on data
-        elif not line.startswith('@'):
-            if not data_start:
-                data_start = True
-            # Skip first 6 columns (chr, start, end, name, score, strand)
-            values = [float(x) for x in line.strip().split()[6:]]
-            matrices.append(values)
+        # Read data lines
+        data_lines = []
+        for line in f:
+            if line.strip():
+                data_lines.append(line.strip().split('\t'))
 
-    data_matrix = np.array(matrices)
+        # Extract matrix values (skip first 6 genomic coordinate columns)
+        matrix_values = []
+        for line in data_lines:
+            values = [float(x) for x in line[6:]]  # Skip chr,start,end...
+            matrix_values.append(values)
 
-    # If we couldn't parse sample names properly, infer from data dimensions
-    if len(samples) == 1 and samples[0].startswith('sample_'):
-        # Infer number of samples from data columns
-        if data_matrix.size > 0:
-            total_cols = data_matrix.shape[1]
-            # Assume bins per sample is consistent, try common values
-            for bins_per_sample in [200, 201, 160, 161, 400, 401]:
-                if total_cols % bins_per_sample == 0:
-                    n_samples = total_cols // bins_per_sample
-                    samples = [f"sample_{i+1}" for i in range(n_samples)]
-                    print(f"Inferred {n_samples} samples with {bins_per_sample} bins each")
-                    break
-            else:
-                # Fallback: assume single sample
-                samples = ["sample_1"]
-                print(f"Warning: Could not infer sample count from {total_cols} columns, assuming single sample")
+        # Convert to numpy array - shape: (n_regions, n_samples * n_bins)
+        data_matrix = np.array(matrix_values)
 
     return samples, data_matrix
 
@@ -84,30 +53,32 @@ def calculate_tss_enrichment(matrix_file, output_file):
         raise ValueError(f"Data columns ({data.shape[1]}) not evenly divisible by number of samples ({n_samples})")
 
     # Validate matrix dimensions
-    if n_bins < 200:
-        raise ValueError(f"Matrix has too few bins ({n_bins}). Expected at least 200 bins for TSS enrichment calculation.")
+    if n_bins < 50:
+        raise ValueError(f"Matrix has too few bins ({n_bins}). Expected at least 50 bins for TSS enrichment calculation.")
 
     enrichments = []
 
     center = n_bins // 2
-    window_size = 4   # ±200 bp if 50 bp bins
-    flank_size = 20   # 1000 bp if 50 bp bins
-    max_flank = 100   # 5000 bp if 50 bp bins
+    window_size = 8       # ±400 bp if 50 bp bins (broader TSS capture)
+    flank_distance = 25   # 1.25kb from center to start of flanks
+    flank_size = 10       # ±500 bp flanks
+    max_flank = flank_distance + flank_size  # Total distance from center
 
     # Validate parameters against matrix size
     if center - max_flank < 0 or center + max_flank >= n_bins:
         # Adjust parameters for smaller matrices
         max_flank = min(max_flank, center, n_bins - center - 1)
-        flank_size = min(flank_size, max_flank - window_size - 1)
+        flank_distance = max(window_size + 5, max_flank - flank_size)
+        flank_size = min(flank_size, max_flank - flank_distance)
 
     for i, sample in enumerate(samples):
         sample_data = data[:, i*n_bins:(i+1)*n_bins]
 
         # Define safe bounds with explicit validation
-        left_start = max(center - max_flank, 0)
-        left_end   = max(center - flank_size, 0)
-        right_start = min(center + flank_size, n_bins)
-        right_end   = min(center + max_flank, n_bins)
+        left_start = max(center - flank_distance - flank_size, 0)
+        left_end   = max(center - flank_distance, 0)
+        right_start = min(center + flank_distance, n_bins)
+        right_end   = min(center + flank_distance + flank_size, n_bins)
 
         center_start = max(center - window_size, 0)
         center_end   = min(center + window_size, n_bins)
