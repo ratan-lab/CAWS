@@ -108,7 +108,8 @@ tss_enrichment <- NULL
 if (length(as.character(snakemake@input[["tss_enrichment"]])) > 0) {
   tss_path <- get_abs_path(as.character(snakemake@input[["tss_enrichment"]]))
   if (file.exists(tss_path)) {
-    tss_enrichment <- read_data(tss_path)
+    tss_enrichment <- read_data(tss_path) |>
+        mutate(sample_id = str_replace_all(sample_id, "_raw", ""))
   }
 }
 ```

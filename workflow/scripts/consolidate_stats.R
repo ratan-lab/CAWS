@@ -40,7 +40,8 @@ seacr_consolidated <- seacr_num |>
     seacr_gc |> select(sampleID, median_gc) |>
     rename(seacr_median_gc = median_gc),
     by = "sampleID"
-  )
+  ) |>
+  distinct()
 
 # Consolidate MACS3 stats
 macs3_consolidated <- macs3_num |>
@@ -66,7 +67,8 @@ macs3_consolidated <- macs3_num |>
     macs3_gc |> select(sampleID, median_gc) |>
     rename(macs3_median_gc = median_gc),
     by = "sampleID"
-  )
+  ) |>
+  distinct()
 
 # Combine both methods
 consolidated_stats <- seacr_consolidated |>
