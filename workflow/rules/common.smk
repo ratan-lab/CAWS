@@ -18,5 +18,9 @@ def get_bam_control(wildcards):
     rep_index = samplesheet.loc[wildcards.sample]['group']
     controls = samplesheet[samplesheet['condition'] == "Control"]
     sample = controls.loc[controls['group'] == rep_index].index.tolist()[0]
-    return "dedupalignments/"+ sample + ".sorted.bam"
+    # Match the dedup setting used for experimental samples and use quality-filtered BAMs
+    if config["dedup"]:
+        return f"dedupalignments/{sample}.sorted.qflt.bam"
+    else:
+        return f"alignments/{sample}.sorted.qflt.bam"
 

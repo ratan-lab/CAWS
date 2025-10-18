@@ -786,7 +786,7 @@ rule consolidate_stats:
     script:
         "scripts/consolidate_stats.R"
 
-rule make_peak_heatmap:
+rule create_bigwig:
     input:
         bam=(
             "dedupalignments/{sample}.sorted.bam"
@@ -798,28 +798,40 @@ rule make_peak_heatmap:
             if config["dedup"]
             else "alignments/{sample}.sorted.bam.bai"
         ),
-        peaks="peaks/seacr/{sample}.peaks.stringent.bed",
     output:
         bw="alignments/{sample}_raw.bw",
-        peaks=temp("peaks/seacr/{sample}.peaks.summitRegion.bed"),
-        mat=temp("peaks/seacr/{sample}.mat.gz"),
-        heatmap="stats/seacr/{sample}.heatmap.png",
-    wildcard_constraints:
-        sample="|".join(EXPERIMENT) if EXPERIMENT else "NO_EXPERIMENT_SAMPLES"
     log:
-        "logs/get_coverage/{sample}.log",
+        "logs/create_bigwig/{sample}.log",
     conda:
         "envs/deeptools.yaml"
     threads: 2
     shell:
         """
         bamCoverage -b {input.bam} -o {output.bw}
+        """
 
-        if [ -s {input.peaks} ]; then 
-            awk '{{split($6, summit, ":"); split(summit[2], region, "-"); print summit[1]"\t"region[1]"\t"region[2]}}' {input.peaks} > {output.peaks} 
+rule make_peak_heatmap:
+    input:
+        bw="alignments/{sample}_raw.bw",
+        peaks="peaks/seacr/{sample}.peaks.stringent.bed",
+    output:
+        peaks=temp("peaks/seacr/{sample}.peaks.summitRegion.bed"),
+        mat=temp("peaks/seacr/{sample}.mat.gz"),
+        heatmap="stats/seacr/{sample}.heatmap.png",
+    wildcard_constraints:
+        sample="|".join(EXPERIMENT) if EXPERIMENT else "NO_EXPERIMENT_SAMPLES"
+    log:
+        "logs/make_peak_heatmap/{sample}.log",
+    conda:
+        "envs/deeptools.yaml"
+    threads: 2
+    shell:
+        """
+        if [ -s {input.peaks} ]; then
+            awk '{{split($6, summit, ":"); split(summit[2], region, "-"); print summit[1]"\t"region[1]"\t"region[2]}}' {input.peaks} > {output.peaks}
 
             computeMatrix reference-point \
-              -S {output.bw} \
+              -S {input.bw} \
               -R {output.peaks} \
               --skipZeros \
               -o {output.mat} -p {threads} -a {config[heatmap_window]} -b {config[heatmap_window]} \
@@ -832,7 +844,7 @@ rule make_peak_heatmap:
         else
             touch {output.peaks}
             touch {output.mat}
-            touch {output.heatmap} 
+            touch {output.heatmap}
         fi
         """
 

@@ -105,11 +105,23 @@ for (absname in as.character(snakemake@input[["peaks"]])) {
     if (file.size(absname) == 0L) next
     filename = basename(absname)
     sample = str_split(filename, suffix)[[1]][1]
-    
+
     peakRes = read.table(absname, header = FALSE, fill = TRUE)
     peak.gr = GRanges(seqnames = peakRes$V1, IRanges(start = peakRes$V2, end = peakRes$V3), strand = "*")
     bamFile = paste0(folder, "/", sample, ".sorted.qflt.bam")
-    fragment_counts = getCounts(bamFile, peak.gr, paired = TRUE, by_rg = FALSE, format = "bam")
+
+    # Determine if sample is paired-end from samplesheet
+    sample_info <- samplesheet |> filter(sampleID == sample)
+    is_paired <- if (nrow(sample_info) > 0) {
+        read2_value <- sample_info$read2[1]
+        # Check if read2 is missing/empty (indicates single-end)
+        !(is.na(read2_value) || trimws(tolower(as.character(read2_value))) %in% c("", "na", "n/a", "null", "none", "-", "nan"))
+    } else {
+        # Default to TRUE if sample not found (shouldn't happen)
+        TRUE
+    }
+
+    fragment_counts = getCounts(bamFile, peak.gr, paired = is_paired, by_rg = FALSE, format = "bam")
     inPeakN = counts(fragment_counts)[,1] |> sum()
     peakF = tibble(inPeakN=inPeakN, sampleID=sample) |> bind_rows(peakF)
 }
