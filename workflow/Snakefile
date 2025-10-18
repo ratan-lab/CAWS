@@ -104,7 +104,7 @@ def validate_mixed_samplesheet():
             if pd.isna(row['read2']) or not os.path.exists(row['read2']):
                 errors.append(f"Sample {sample_id}: Marked as paired-end but read2 file missing/invalid: {row['read2']}")
         else:
-            if not pd.isna(row['read2']) and str(row['read2']).strip() not in ['', '-', 'NA', 'na', 'NULL', 'null']:
+            if not pd.isna(row['read2']) and str(row['read2']).strip() not in ['', '-', 'NA', 'na', 'NULL', 'null', 'nan', 'NaN']:
                 warnings.append(f"Sample {sample_id}: Marked as single-end but has read2 value: {row['read2']}")
 
     # Report results
@@ -366,7 +366,7 @@ rule find_ecoli_reads_pe:
 rule find_ecoli_reads_se:
     input:
         ref=config["ecoli_reference"],
-        r1="trimmed/{sample}_val_1.fq.gz" if config["trim_adapters"] else r1_from_sample,
+        r1="trimmed/{sample}_trimmed.fq.gz" if config["trim_adapters"] else r1_from_sample,
     output:
         sam=temp("alignments/{sample}.ecoli.sam"),
         txt="alignments/{sample}.ecoli.txt",
