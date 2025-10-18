@@ -22,7 +22,35 @@ samplesheet = pd.read_csv(
         "read1": str,
         "read2": str,
     },
+    na_values=['', 'NA', 'na', 'N/A', 'n/a', 'NULL', 'null', 'None', 'none', '-'],
+    skipinitialspace=True,
+    keep_default_na=True
 ).set_index("sampleID")
+
+# Strip whitespace from all string columns to handle user input issues
+for col in ['condition', 'group', 'read1', 'read2']:
+    samplesheet[col] = samplesheet[col].astype(str).str.strip()
+
+# Enhanced NA detection for mixed single-end/paired-end support
+def is_missing_read2(read2_value):
+    """Check if read2 value indicates missing/absent file"""
+    if pd.isna(read2_value):
+        return True
+
+    # Convert to string and normalize
+    str_value = str(read2_value).strip().lower()
+
+    # List of values that indicate missing read2
+    missing_indicators = {
+        '', 'na', 'n/a', 'null', 'none', '-',
+        'nan', 'nil', 'empty', '0', 'false',
+        'missing', 'absent', 'single', 'se'
+    }
+
+    return str_value in missing_indicators
+
+# Apply enhanced detection
+samplesheet['is_paired'] = ~samplesheet['read2'].apply(is_missing_read2)
 
 # check the sample names are unique
 assert len(np.unique(samplesheet.index.tolist())) == len(samplesheet.index.tolist()), "sampleIDs in the samplesheet are not unique"
@@ -42,9 +70,62 @@ logdir = config["outdir"] + "/logs"
 if not os.path.exists(logdir):
     os.makedirs(logdir)
 
+# Sample classification for dual-rule architecture
+def get_pe_samples():
+    """Return list of paired-end sample IDs"""
+    return samplesheet[samplesheet['is_paired']].index.tolist()
+
+def get_se_samples():
+    """Return list of single-end sample IDs"""
+    return samplesheet[~samplesheet['is_paired']].index.tolist()
+
+# Sample lists
 SAMPLES = samplesheet.index.tolist()
 EXPERIMENT = samplesheet[samplesheet["condition"] != "Control"].index.tolist()
 CONTROL = samplesheet[samplesheet["condition"] == "Control"].index.tolist()
+PE_SAMPLES = get_pe_samples()
+SE_SAMPLES = get_se_samples()
+
+# Enhanced validation for mixed samplesheets
+def validate_mixed_samplesheet():
+    """Comprehensive validation for mixed SE/PE samplesheets"""
+    print("🔬 Validating mixed single-end/paired-end samplesheet...")
+
+    errors = []
+    warnings = []
+
+    for sample_id, row in samplesheet.iterrows():
+        # Validate read1 (always required)
+        if not os.path.exists(row['read1']):
+            errors.append(f"Sample {sample_id}: Read1 file not found: {row['read1']}")
+
+        # Validate read2 for paired-end samples
+        if row['is_paired']:
+            if pd.isna(row['read2']) or not os.path.exists(row['read2']):
+                errors.append(f"Sample {sample_id}: Marked as paired-end but read2 file missing/invalid: {row['read2']}")
+        else:
+            if not pd.isna(row['read2']) and str(row['read2']).strip() not in ['', '-', 'NA', 'na', 'NULL', 'null']:
+                warnings.append(f"Sample {sample_id}: Marked as single-end but has read2 value: {row['read2']}")
+
+    # Report results
+    if errors:
+        print("❌ Samplesheet validation errors:")
+        for error in errors:
+            print(f"  {error}")
+        raise ValueError("Samplesheet validation failed")
+
+    if warnings:
+        print("⚠️  Samplesheet validation warnings:")
+        for warning in warnings:
+            print(f"  {warning}")
+
+    print(f"✅ Samplesheet validation passed")
+    print(f"   📊 {len(PE_SAMPLES)} paired-end samples: {PE_SAMPLES}")
+    print(f"   📊 {len(SE_SAMPLES)} single-end samples: {SE_SAMPLES}")
+    print(f"   📈 Fragment analysis will be performed for {len(PE_SAMPLES)} paired-end samples only")
+
+# Run validation
+validate_mixed_samplesheet()
 
 rule all:
     input:
@@ -55,36 +136,63 @@ rule all:
         expand("stats/seacr/{sample}.heatmap.png", sample=EXPERIMENT),
         expand("stats/seacr/{sample}_gc_content.txt", sample=EXPERIMENT),
         expand("stats/macs3/{sample}_gc_content.txt", sample=EXPERIMENT),
+        # Fragment analysis only for paired-end samples
+        expand("alignments/{sample}.fraglengths.txt", sample=PE_SAMPLES),
         "stats/tss_enrichment.txt" if config["gtf_file"] else [],
         "reports/cutntag_analysis_report.html",
 
 
-rule check_quality:
+rule check_quality_pe:
     input:
         r1="trimmed/{sample}_val_1.fq.gz" if config["trim_adapters"] else r1_from_sample,
         r2="trimmed/{sample}_val_2.fq.gz" if config["trim_adapters"] else r2_from_sample,
     output:
         out1=directory("qc/{sample}_1"),
         out2=directory("qc/{sample}_2"),
+    wildcard_constraints:
+        sample="|".join(PE_SAMPLES) if PE_SAMPLES else "NO_PE_SAMPLES"
     log:
-        "logs/check_quality/{sample}.log",
+        "logs/check_quality_pe/{sample}.log",
     conda:
         "envs/fastqc.yaml"
     shell:
         """
-        mkdir -p {output.out1} {output.out2} && fastqc -o {output.out1} {input.r1} && fastqc -o {output.out2} {input.r2}
+        mkdir -p {output.out1} {output.out2}
+        fastqc -o {output.out1} {input.r1}
+        fastqc -o {output.out2} {input.r2}
+        """
+
+rule check_quality_se:
+    input:
+        r1="trimmed/{sample}_trimmed.fq.gz" if config["trim_adapters"] else r1_from_sample,
+    output:
+        out1=directory("qc/{sample}_1"),
+        out2=directory("qc/{sample}_2"),
+    wildcard_constraints:
+        sample="|".join(SE_SAMPLES) if SE_SAMPLES else "NO_SE_SAMPLES"
+    log:
+        "logs/check_quality_se/{sample}.log",
+    conda:
+        "envs/fastqc.yaml"
+    shell:
+        """
+        mkdir -p {output.out1} {output.out2}
+        fastqc -o {output.out1} {input.r1}
+        echo "SINGLE_END_NO_R2_DATA" > {output.out2}/se_placeholder.txt
         """
 
 
-rule trim_adapters:
+rule trim_adapters_pe:
     input:
         r1=r1_from_sample,
         r2=r2_from_sample,
     output:
         out1="trimmed/{sample}_val_1.fq.gz",
         out2="trimmed/{sample}_val_2.fq.gz",
+    wildcard_constraints:
+        sample="|".join(PE_SAMPLES) if PE_SAMPLES else "NO_PE_SAMPLES"
     log:
-        "logs/trim_adapters/{sample}.log",
+        "logs/trim_adapters_pe/{sample}.log",
     conda:
         "envs/trim_galore.yaml"
     shell:
@@ -92,8 +200,26 @@ rule trim_adapters:
         trim_galore --gzip --trim-n -o trimmed --basename {wildcards.sample} --paired {input.r1} {input.r2}
         """
 
+rule trim_adapters_se:
+    input:
+        r1=r1_from_sample,
+    output:
+        out1="trimmed/{sample}_trimmed.fq.gz",
+        out2="trimmed/{sample}_SE_placeholder.txt",
+    wildcard_constraints:
+        sample="|".join(SE_SAMPLES) if SE_SAMPLES else "NO_SE_SAMPLES"
+    log:
+        "logs/trim_adapters_se/{sample}.log",
+    conda:
+        "envs/trim_galore.yaml"
+    shell:
+        """
+        trim_galore --gzip --trim-n -o trimmed --basename {wildcards.sample} {input.r1}
+        echo "SINGLE_END_NO_R2_TRIMMED" > {output.out2}
+        """
 
-rule align_reads:
+
+rule align_reads_pe:
     input:
         ref=config["reference_fa"],
         r1="trimmed/{sample}_val_1.fq.gz" if config["trim_adapters"] else r1_from_sample,
@@ -101,8 +227,10 @@ rule align_reads:
     output:
         sam=temp("alignments/{sample}.sam"),
         log="alignments/{sample}.alignments.txt",
+    wildcard_constraints:
+        sample="|".join(PE_SAMPLES) if PE_SAMPLES else "NO_PE_SAMPLES"
     log:
-        "logs/align_reads/{sample}.log",
+        "logs/align_reads_pe/{sample}.log",
     conda:
         "envs/bowtie.yaml"
     threads: 8
@@ -112,6 +240,28 @@ rule align_reads:
     shell:
         """
         bowtie2 {params.aln} --very-sensitive --no-mixed --no-discordant --phred33 -I {config[fragment_min]} -X {config[fragment_max]} -p {threads} -x {params.ref} -1 {input.r1} -2 {input.r2} -S {output.sam} |& tee {output.log}
+        """
+
+rule align_reads_se:
+    input:
+        ref=config["reference_fa"],
+        r1="trimmed/{sample}_trimmed.fq.gz" if config["trim_adapters"] else r1_from_sample,
+    output:
+        sam=temp("alignments/{sample}.sam"),
+        log="alignments/{sample}.alignments.txt",
+    wildcard_constraints:
+        sample="|".join(SE_SAMPLES) if SE_SAMPLES else "NO_SE_SAMPLES"
+    log:
+        "logs/align_reads_se/{sample}.log",
+    conda:
+        "envs/bowtie.yaml"
+    threads: 8
+    params:
+        aln="--local" if config["trim_adapters"] else "--end-to-end",
+        ref=config["bt2_idx"],
+    shell:
+        """
+        bowtie2 {params.aln} --very-sensitive --phred33 -p {threads} -x {params.ref} -U {input.r1} -S {output.sam} |& tee {output.log}
         """
 
 
@@ -191,7 +341,7 @@ rule find_mtdna_reads:
         """
 
 
-rule find_ecoli_reads:
+rule find_ecoli_reads_pe:
     input:
         ref=config["ecoli_reference"],
         r1="trimmed/{sample}_val_1.fq.gz" if config["trim_adapters"] else r1_from_sample,
@@ -199,8 +349,10 @@ rule find_ecoli_reads:
     output:
         sam=temp("alignments/{sample}.ecoli.sam"),
         txt="alignments/{sample}.ecoli.txt",
+    wildcard_constraints:
+        sample="|".join(PE_SAMPLES) if PE_SAMPLES else "NO_PE_SAMPLES"
     log:
-        "logs/find_ecoli_reads/{sample}.log",
+        "logs/find_ecoli_reads_pe/{sample}.log",
     conda:
         "envs/bowtie.yaml"
     threads: 4
@@ -209,6 +361,27 @@ rule find_ecoli_reads:
     shell:
         """
         bowtie2 --end-to-end --very-sensitive --no-mixed --no-discordant --phred33 -I {config[fragment_min]} -X {config[fragment_max]} -p {threads} -x {params.ref} -1 {input.r1} -2 {input.r2} -S {output.sam} &> {output.txt}
+        """
+
+rule find_ecoli_reads_se:
+    input:
+        ref=config["ecoli_reference"],
+        r1="trimmed/{sample}_val_1.fq.gz" if config["trim_adapters"] else r1_from_sample,
+    output:
+        sam=temp("alignments/{sample}.ecoli.sam"),
+        txt="alignments/{sample}.ecoli.txt",
+    wildcard_constraints:
+        sample="|".join(SE_SAMPLES) if SE_SAMPLES else "NO_SE_SAMPLES"
+    log:
+        "logs/find_ecoli_reads_se/{sample}.log",
+    conda:
+        "envs/bowtie.yaml"
+    threads: 4
+    params:
+        ref=config["ecoli_bt2_idx"],
+    shell:
+        """
+        bowtie2 --end-to-end --very-sensitive --phred33 -p {threads} -x {params.ref} -U {input.r1} -S {output.sam} &> {output.txt}
         """
 
 
@@ -233,13 +406,19 @@ rule fragment_size:
         "alignments/{sample}.sorted.bam",
     output:
         "alignments/{sample}.fraglengths.txt",
+    wildcard_constraints:
+        sample="|".join(PE_SAMPLES) if PE_SAMPLES else "NO_PE_SAMPLES"
     log:
         "logs/fragment_size/{sample}.log",
     conda:
         "envs/samtools.yaml"
     shell:
         """
-        samtools view -F 0x04 {input} | awk -F"\\t" 'function abs(x){{return ((x < 0.0) ? -x : x)}} {{print abs($9)}}' | sort | uniq -c | awk -v OFS="\\t" '{{print $2, $1/2}}' > {output} 
+        # Extract insert sizes for paired-end only
+        samtools view -f 1 -F 0x04 {input} \
+        | awk -F"\\t" 'function abs(x){{return ((x < 0.0) ? -x : x)}} {{print abs($9)}}' \
+        | sort -n | uniq -c \
+        | awk -v OFS="\\t" '{{print $2, $1/2}}' > {output}
         """
 
 
@@ -248,7 +427,7 @@ rule fragment_size:
 # we filter all reads overlapping the blacklist, remove non-primary and sex
 # chromosomes and remove low-quality reads to create the bedgraph file which
 # is given to the peak caller
-rule bam_to_bed:
+rule bam_to_bed_pe:
     input:
         fai=config["reference_fai"],
         blklist=config["blacklist"],
@@ -277,15 +456,19 @@ rule bam_to_bed:
         bed=temp("bedalignments/{sample}.bed"),
         bedgraph="bedalignments/{sample}.bedgraph",
         binbed="bedalignments/{sample}.bin.bed",
+    wildcard_constraints:
+        sample="|".join(PE_SAMPLES) if PE_SAMPLES else "NO_PE_SAMPLES"
     log:
-        "logs/bam_to_bed/{sample}.log",
+        "logs/bam_to_bed_pe/{sample}.log",
     params:
         chroms=config["chromosome_file"],
         minq=config["minquality"],
     conda:
         "envs/bedtools.yaml"
+    threads: 2
     shell:
         """
+        # Paired-end processing: use -f 1 flag for paired reads
         samtools view -h -q {params.minq} -f 1 -F 3852 {input.bam} $(tr '\\n' ' ' < {params.chroms}) \
         | awk -F "\\t" '/^@/ {{print; next}} ($7=="=" && $9 <= 1000 && $9 >= -1000) {{print}}' \
         | samtools view -b \
@@ -293,14 +476,15 @@ rule bam_to_bed:
         > {output.qbam}
 
         samtools index {output.qbam}
+        samtools sort -@ {threads} -n -O BAM -o {output.bam} {output.qbam}
 
-        samtools sort -@ {threads} -n -O BAM -o {output.bam} {output.qbam} 
-
+        # Convert to BEDPE format for paired-end
         bedtools bamtobed -i {output.bam} -bedpe \
         | cut -f 1,2,6 \
-        | sort -k1,1 -k2,2n -k3,3n  \
+        | sort -k1,1 -k2,2n -k3,3n \
         > {output.bed}
 
+        # Common processing
         bedtools genomecov -bg -i {output.bed} \
             -g <(cut -f 1,2 {input.fai}) > {output.bedgraph}
 
@@ -308,7 +492,73 @@ rule bam_to_bed:
         | sort -k1,1V -k2,2n \
         | uniq -c \
         | awk -v OFS="\\t" '{{print $2, $3, $1}}' \
-        |  sort -k1,1V -k2,2n  > {output.binbed}
+        | sort -k1,1V -k2,2n > {output.binbed}
+        """
+
+rule bam_to_bed_se:
+    input:
+        fai=config["reference_fai"],
+        blklist=config["blacklist"],
+        bai=(
+            "dedupalignments/{sample}.sorted.bam.bai"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.bam.bai"
+        ),
+        bam=(
+            "dedupalignments/{sample}.sorted.bam"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.bam"
+        ),
+    output:
+        bam=temp("{sample}.name.bam"),
+        qbam=(
+            "dedupalignments/{sample}.sorted.qflt.bam"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.qflt.bam"
+        ),
+        qbai=(
+            "dedupalignments/{sample}.sorted.qflt.bam.bai"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.qflt.bam.bai"
+        ),
+        bed=temp("bedalignments/{sample}.bed"),
+        bedgraph="bedalignments/{sample}.bedgraph",
+        binbed="bedalignments/{sample}.bin.bed",
+    wildcard_constraints:
+        sample="|".join(SE_SAMPLES) if SE_SAMPLES else "NO_SE_SAMPLES"
+    log:
+        "logs/bam_to_bed_se/{sample}.log",
+    params:
+        chroms=config["chromosome_file"],
+        minq=config["minquality"],
+    conda:
+        "envs/bedtools.yaml"
+    threads: 2
+    shell:
+        """
+        # Single-end processing: use -F 3844 (remove paired-specific flags)
+        samtools view -h -q {params.minq} -F 3844 {input.bam} $(tr '\\n' ' ' < {params.chroms}) \
+        | samtools view -b \
+        | bedtools intersect -abam - -b {input.blklist} -v \
+        > {output.qbam}
+
+        samtools index {output.qbam}
+        samtools sort -@ {threads} -n -O BAM -o {output.bam} {output.qbam}
+
+        # Convert to BED format for single-end
+        bedtools bamtobed -i {output.bam} \
+        | sort -k1,1 -k2,2n -k3,3n \
+        > {output.bed}
+
+        # Common processing
+        bedtools genomecov -bg -i {output.bed} \
+            -g <(cut -f 1,2 {input.fai}) > {output.bedgraph}
+
+        awk -v w=500 '{{print $1, int(($2 + $3)/(2*w))*w + w/2}}' {output.bed} \
+        | sort -k1,1V -k2,2n \
+        | uniq -c \
+        | awk -v OFS="\\t" '{{print $2, $3, $1}}' \
+        | sort -k1,1V -k2,2n > {output.binbed}
         """
 
 rule calculate_seacr_peak_gc:
@@ -364,6 +614,8 @@ rule call_seacr_peaks:
         exp="bedalignments/{sample}.bedgraph",
     output:
         "peaks/seacr/{sample}.peaks.stringent.bed",
+    wildcard_constraints:
+        sample="|".join(EXPERIMENT) if EXPERIMENT else "NO_EXPERIMENT_SAMPLES"
     log:
         "logs/call_seacr_peaks/{sample}.log",
     conda:
@@ -383,7 +635,7 @@ rule call_seacr_peaks:
         fi
         """
 
-rule call_macs_peaks:
+rule call_macs_peaks_pe:
     input:
         con=get_bam_control if config["igg_control"] else [],
         exp=(
@@ -400,8 +652,10 @@ rule call_macs_peaks:
         sbed="peaks/macs3/{sample}_summits.bed",
         npeaks="peaks/macs3/{sample}_peaks.narrowPeak",
         peaks="peaks/macs3/{sample}_peaks.xls"
+    wildcard_constraints:
+        sample="|".join([s for s in PE_SAMPLES if s in EXPERIMENT]) if PE_SAMPLES else "NO_PE_SAMPLES"
     log:
-        "logs/call_macs_peaks/{sample}.log",
+        "logs/call_macs_peaks_pe/{sample}.log",
     conda:
         "envs/macs.yaml"
     params:
@@ -415,7 +669,48 @@ rule call_macs_peaks:
         else
            macs3 callpeak -t {input.exp} -f BAMPE -g hs -n "{params.prefix}" --outdir {params.dir} -B -q {config[macs3_qvalue_no_control]} --nolambda || true
         fi
-        if [ ! -f {output.npeaks} ]; then 
+        if [ ! -f {output.npeaks} ]; then
+            touch {output.sbed}
+            touch {output.npeaks}
+            touch {output.peaks}
+        fi
+        """
+
+rule call_macs_peaks_se:
+    input:
+        con=get_bam_control if config["igg_control"] else [],
+        exp=(
+            "dedupalignments/{sample}.sorted.qflt.bam"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.qflt.bam"
+        ),
+        expi=(
+            "dedupalignments/{sample}.sorted.qflt.bam.bai"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.qflt.bam.bai"
+        ),
+    output:
+        sbed="peaks/macs3/{sample}_summits.bed",
+        npeaks="peaks/macs3/{sample}_peaks.narrowPeak",
+        peaks="peaks/macs3/{sample}_peaks.xls"
+    wildcard_constraints:
+        sample="|".join([s for s in SE_SAMPLES if s in EXPERIMENT]) if SE_SAMPLES else "NO_SE_SAMPLES"
+    log:
+        "logs/call_macs_peaks_se/{sample}.log",
+    conda:
+        "envs/macs.yaml"
+    params:
+        prefix="{sample}",
+        dir="peaks/macs3",
+        has_igg=config["igg_control"],
+    shell:
+        """
+        if [ {params.has_igg} == True ]; then
+           macs3 callpeak -t {input.exp} -c {input.con} -f BAM -g hs -n "{params.prefix}" --outdir {params.dir} -B -q {config[macs3_qvalue_with_control]} || true
+        else
+           macs3 callpeak -t {input.exp} -f BAM -g hs -n "{params.prefix}" --outdir {params.dir} -B -q {config[macs3_qvalue_no_control]} --nolambda || true
+        fi
+        if [ ! -f {output.npeaks} ]; then
             touch {output.sbed}
             touch {output.npeaks}
             touch {output.peaks}
@@ -603,7 +898,7 @@ rule generate_html_report:
         macs3_gc="stats/macs3/peaks_gc_content.txt",
         seacr_peaks=expand("peaks/seacr/{sample}.peaks.stringent.bed", sample=EXPERIMENT),
         macs3_peaks=expand("peaks/macs3/{sample}_peaks.narrowPeak", sample=EXPERIMENT),
-        fragments=expand("alignments/{sample}.fraglengths.txt", sample=SAMPLES),
+        fragments=expand("alignments/{sample}.fraglengths.txt", sample=PE_SAMPLES),
         coverage_bins=expand("bedalignments/{sample}.bin.bed", sample=SAMPLES),
         tss_enrichment="stats/tss_enrichment.txt" if config["gtf_file"] else [],
     output:
@@ -618,6 +913,14 @@ rule generate_html_report:
         snakefile_dir=workflow.basedir,
     script:
         "scripts/render_html_report.R"
+
+# Rule ordering to prevent conflicts when both PE and SE samples are present
+ruleorder: check_quality_pe > check_quality_se
+ruleorder: trim_adapters_pe > trim_adapters_se
+ruleorder: align_reads_pe > align_reads_se
+ruleorder: find_ecoli_reads_pe > find_ecoli_reads_se
+ruleorder: bam_to_bed_pe > bam_to_bed_se
+ruleorder: call_macs_peaks_pe > call_macs_peaks_se
 
 onsuccess:
     shutil.rmtree(os.path.join(config["outdir"], "alignments"), ignore_errors=True)
