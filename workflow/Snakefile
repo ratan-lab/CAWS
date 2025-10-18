@@ -107,6 +107,10 @@ def validate_mixed_samplesheet():
             if not pd.isna(row['read2']) and str(row['read2']).strip() not in ['', '-', 'NA', 'na', 'NULL', 'null', 'nan', 'NaN']:
                 warnings.append(f"Sample {sample_id}: Marked as single-end but has read2 value: {row['read2']}")
 
+    # Validate that at least one experimental sample exists
+    if len(EXPERIMENT) == 0:
+        errors.append("No experimental samples found. At least one non-Control sample is required for peak calling.")
+
     # Report results
     if errors:
         print("❌ Samplesheet validation errors:")
@@ -567,6 +571,8 @@ rule calculate_seacr_peak_gc:
         fasta=config["reference_fa"],
     output:
         gc_stats="stats/seacr/{sample}_gc_content.txt",
+    wildcard_constraints:
+        sample="|".join(EXPERIMENT) if EXPERIMENT else "NO_EXPERIMENT_SAMPLES"
     log:
         "logs/calculate_peak_gc/seacr_{sample}.log",
     conda:
@@ -590,6 +596,8 @@ rule calculate_macs_peak_gc:
         fasta=config["reference_fa"],
     output:
         gc_stats="stats/macs3/{sample}_gc_content.txt",
+    wildcard_constraints:
+        sample="|".join(EXPERIMENT) if EXPERIMENT else "NO_EXPERIMENT_SAMPLES"
     log:
         "logs/calculate_peak_gc/macs3_{sample}.log",
     conda:
@@ -796,6 +804,8 @@ rule make_peak_heatmap:
         peaks=temp("peaks/seacr/{sample}.peaks.summitRegion.bed"),
         mat=temp("peaks/seacr/{sample}.mat.gz"),
         heatmap="stats/seacr/{sample}.heatmap.png",
+    wildcard_constraints:
+        sample="|".join(EXPERIMENT) if EXPERIMENT else "NO_EXPERIMENT_SAMPLES"
     log:
         "logs/get_coverage/{sample}.log",
     conda:
