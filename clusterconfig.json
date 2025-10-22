@@ -9,9 +9,15 @@
     "error": "logs/{rule}.{wildcards}.err",
     "account": ""
   },
-  "align_reads": {
+  "align_reads_pe": {
+    "nCPUs": 8,
     "memory": 30000,
-    "maxTime": "8:00:00",
+    "maxTime": "8:00:00"
+  },
+  "align_reads_se": {
+    "nCPUs": 8,
+    "memory": 30000,
+    "maxTime": "8:00:00"
   },
   "remove_duplicates": {
     "nCPUs": 2,
@@ -24,5 +30,17 @@
   "dedup_assess_peaks": {
     "nCPUs": 2,
     "memory": 12000
+  },
+  "assess_replicates": {
+    "memory": 8000
+  },
+  "make_peak_heatmap": {
+    "memory": 16000
+  },
+  "calculate_tss_enrichment": {
+    "memory": 16000
+  },
+  "generate_html_report": {
+    "memory": 16000
   }
 }
