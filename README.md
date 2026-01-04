@@ -188,6 +188,7 @@ reports/cutntag_analysis_report.html
 | `dedup` | `true`/`false` — remove PCR duplicates before peak calling |
 | `minquality` | Minimum mapping quality threshold |
 | `fragment_min`, `fragment_max` | Fragment size range for alignments |
+| `genome_size` | Genome size for MACS3 peak calling: `"hs"` (human), `"mm"` (mouse), `"ce"` (C. elegans), `"dm"` (Drosophila), or numeric value (e.g., `2.7e9`) |
 | `seacr_qvalue`, `macs3_qvalue_with_control`, `macs3_qvalue_no_control` | Statistical thresholds for SEACR/MACS3 |
 | `heatmap_window` | Window size (bp) around peaks for heatmaps |
 | `gtf_file` | Path to GTF file for TSS enrichment (optional) |
@@ -212,6 +213,7 @@ reports/cutntag_analysis_report.html
     "minquality": 3,
     "fragment_min": 10,
     "fragment_max": 700,
+    "genome_size": "hs",
     "seacr_qvalue": 0.01,
     "macs3_qvalue_with_control": 0.01,
     "macs3_qvalue_no_control": 0.001,

@@ -691,9 +691,9 @@ rule call_macs_peaks_pe:
     shell:
         """
         if [ {params.has_igg} == True ]; then
-           macs3 callpeak -t {input.exp} -c {input.con} -f BAMPE -g hs -n "{params.prefix}" --outdir {params.dir} -B -q {config[macs3_qvalue_with_control]} || true
+           macs3 callpeak -t {input.exp} -c {input.con} -f BAMPE -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} -B -q {config[macs3_qvalue_with_control]} || true
         else
-           macs3 callpeak -t {input.exp} -f BAMPE -g hs -n "{params.prefix}" --outdir {params.dir} -B -q {config[macs3_qvalue_no_control]} --nolambda || true
+           macs3 callpeak -t {input.exp} -f BAMPE -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} -B -q {config[macs3_qvalue_no_control]} --nolambda || true
         fi
         if [ ! -f {output.npeaks} ]; then
             touch {output.sbed}
@@ -732,9 +732,9 @@ rule call_macs_peaks_se:
     shell:
         """
         if [ {params.has_igg} == True ]; then
-           macs3 callpeak -t {input.exp} -c {input.con} -f BAM -g hs -n "{params.prefix}" --outdir {params.dir} -B -q {config[macs3_qvalue_with_control]} || true
+           macs3 callpeak -t {input.exp} -c {input.con} -f BAM -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} -B -q {config[macs3_qvalue_with_control]} || true
         else
-           macs3 callpeak -t {input.exp} -f BAM -g hs -n "{params.prefix}" --outdir {params.dir} -B -q {config[macs3_qvalue_no_control]} --nolambda || true
+           macs3 callpeak -t {input.exp} -f BAM -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} -B -q {config[macs3_qvalue_no_control]} --nolambda || true
         fi
         if [ ! -f {output.npeaks} ]; then
             touch {output.sbed}
