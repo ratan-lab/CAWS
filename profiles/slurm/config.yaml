@@ -1,0 +1,117 @@
+# Snakemake 9.x Profile for SLURM execution
+# This profile replaces the deprecated --cluster and --cluster-config flags
+#
+# IMPORTANT: Edit the slurm_account and slurm_partition values below
+# to match your HPC allocation and partition
+
+# Executor configuration
+executor: slurm
+jobs: 50                    # Maximum number of simultaneous jobs
+latency-wait: 120           # Wait time for files 
+
+# Conda settings
+use-conda: true
+conda-frontend: mamba      # Use mamba for faster environment creation
+
+# Execution behavior
+rerun-incomplete: true     # Rerun incomplete jobs
+keep-going: true           # Continue with other jobs if one fails
+printshellcmds: true       # Print shell commands being executed
+
+# Default resources for all rules
+# These are applied to every rule unless overridden
+default-resources:
+  - slurm_account=          # TODO: Set your allocation name (e.g., ratan-lab)
+  - slurm_partition=        # TODO: Set your partition (e.g., standard)
+  - runtime=180             # 3 hours in minutes
+  - mem_mb=5000             # 5 GB memory
+  - cpus_per_task=1
+
+# Rule-specific resource overrides
+# Maps to rules defined in workflow/Snakefile
+set-resources:
+  # Quality control
+  check_quality:
+    cpus_per_task: 2
+    mem_mb: 4000
+    runtime: 60
+
+  # Adapter trimming
+  trim_adapters:
+    cpus_per_task: 4
+    mem_mb: 8000
+    runtime: 180
+
+  # Alignment needs more memory and time
+  align_reads:
+    mem_mb: 30000    # 30 GB (change to 50 GB for large-genomes/deep-sequencing)
+    runtime: 480     # 8 hours in minutes
+    cpus_per_task: 8
+
+  # BAM conversion and sorting
+  convert_to_binary:
+    cpus_per_task: 2
+    mem_mb: 8000
+    runtime: 120
+
+  # E. coli contamination check
+  find_ecoli_reads:
+    cpus_per_task: 4
+    mem_mb: 8000
+    runtime: 180
+
+  # BAM to BED conversion
+  bam_to_bed:
+    cpus_per_task: 2
+    mem_mb: 8000
+    runtime: 180
+
+  # Duplicate removal
+  remove_duplicates:
+    cpus_per_task: 2
+    mem_mb: 12000   # 12 GB (change to 24000 for high-depth samples >50M reads)
+    runtime: 240    # 4 hours in minutes
+
+  # Peak calling
+  call_seacr_peaks:
+    cpus_per_task: 1
+    mem_mb: 8000
+    runtime: 120
+
+  # Peak assessment
+  assess_peaks:
+    cpus_per_task: 2
+    mem_mb: 12000           # 12 GB
+    runtime: 180            # 3 hours in minutes
+
+  # Deduplicated peak assessment
+  dedup_assess_peaks:
+    cpus_per_task: 2
+    mem_mb: 12000           # 12 GB
+    runtime: 180            # 3 hours in minutes
+
+  # Peak heatmaps
+  make_peak_heatmap:
+    cpus_per_task: 2
+    mem_mb: 12000
+    runtime: 180
+
+  # TSS enrichment
+  calculate_tss_enrichment:
+    cpus_per_task: 4
+    mem_mb: 12000
+    runtime: 180
+
+  # Report generation
+  generate_html_report:
+    cpus_per_task: 1
+    mem_mb: 8000
+    runtime: 120
+
+# SLURM-specific extra arguments
+# These are passed directly to sbatch
+slurm_extra: "--parsable"
+
+# Optional: Custom job name format
+# Uncomment to use custom job naming
+# default-jobname: "{rule}.{wildcards}"
