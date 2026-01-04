@@ -1,7 +1,4 @@
 
-def get_mem_mb(wildcards, threads):
-    return threads * 8000
-
 def r1_from_sample(wildcards):
     return samplesheet.loc[wildcards.sample]['read1']
 
@@ -18,5 +15,10 @@ def get_bam_control(wildcards):
     rep_index = samplesheet.loc[wildcards.sample]['group']
     controls = samplesheet[samplesheet['condition'] == "Control"]
     sample = controls.loc[controls['group'] == rep_index].index.tolist()[0]
-    return "dedupalignments/"+ sample + ".sorted.bam"
+
+    # Respect the dedup configuration - use appropriate path
+    if config["dedup"]:
+        return "dedupalignments/" + sample + ".sorted.qflt.bam"
+    else:
+        return "alignments/" + sample + ".sorted.qflt.bam"
 

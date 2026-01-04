@@ -5,7 +5,9 @@ import numpy as np
 import pandas as pd
 
 ##### set minimum snakemake version #####
-min_version("6.0.0")
+# Updated for Snakemake 9.x compatibility (executor plugins)
+# Minimum version 9.0.0 required for profile-based execution
+min_version("9.0.0")
 
 ##### load rules ##########
 include: "rules/common.smk"

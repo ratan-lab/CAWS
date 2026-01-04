@@ -2,7 +2,7 @@
 ## *A Snakemake-based pipeline for comprehensive CUT&Tag data analysis*  
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Snakemake](https://img.shields.io/badge/snakemake-≥6.0.0-brightgreen.svg)](https://snakemake.bitbucket.io)
+[![Snakemake](https://img.shields.io/badge/snakemake-≥9.0.0-brightgreen.svg)](https://snakemake.readthedocs.io)
 [![Python](https://img.shields.io/badge/python-≥3.7-blue.svg)](https://python.org)
 [![R](https://img.shields.io/badge/R-≥4.0-blue.svg)](https://r-project.org)
 
@@ -34,13 +34,15 @@ CAWS is designed for:
 
 ---
 
-## Prerequisites  
+## Prerequisites
 
-### Required Software  
-- **Snakemake** ≥6.0.0  
-- **Conda** or **Mamba**  
-- **Python** ≥3.7  
-- **R** ≥4.0  
+### Required Software
+- **Snakemake** ≥9.0.0 (tested with 9.8.1)
+- **Conda** or **Mamba**
+- **Python** ≥3.7
+- **R** ≥4.0
+
+**Note**: CAWS requires Snakemake 9.0 or later for profile-based SLURM execution with executor plugins.  
 
 ### System Requirements  
 - **Storage**: ~50 GB free space (typical dataset)  
@@ -59,21 +61,36 @@ CAWS is designed for:
 
 ## Quick Start  
 
-### 1. Clone and Set Up  
+### 1. Clone and Set Up
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/CAWS.git
+git clone https://github.com/ratan-lab/CAWS.git
 cd CAWS
-
-# Create and activate Conda environment
-conda env create -f environment.yml
-conda activate caws
 ```
+
+**Note**: CAWS uses conda environments managed automatically by Snakemake. No need to create a master environment.
 
 ---
 
-### 2. Prepare Configuration Files  
+### 2. Configure SLURM Profile (for HPC execution)
+
+Edit `profiles/slurm/config.yaml` to set your SLURM allocation and partition:
+
+```yaml
+default-resources:
+  - slurm_account=your-allocation-name  # e.g., ratan-lab
+  - slurm_partition=your-partition      # e.g., standard
+  - runtime=180
+  - mem_mb=5000
+  - cpus_per_task=1
+```
+
+**Skip this step** if running locally (not on a cluster).
+
+---
+
+### 3. Prepare Analysis Configuration Files  
 
 **Sample Sheet (`samplesheet.tsv`)**  
 
@@ -92,27 +109,50 @@ cp config.example.json config.json
 
 ---
 
-### 3. Run the Analysis  
+### 4. Run the Analysis
 
-**Local Execution (small datasets)**  
+**Local Execution (small datasets)**
 ```bash
 snakemake --cores 8 --use-conda --configfile config.json
 ```
 
-**SLURM Cluster Execution (recommended for large datasets)**  
+**SLURM Cluster Execution (recommended for large datasets)**
+
+Submit as a SLURM job:
 ```bash
-snakemake \
-    --cores 1 \
-    --configfile config.json \
-    --use-conda \
-    --jobs 50 \
-    --cluster-config clusterconfig.json \
-    --cluster "sbatch --partition {cluster.queue} --cpus-per-task {cluster.nCPUs} --mem {cluster.memory}"
+# Create a submission script
+cat > run_caws.sh << 'EOF'
+#!/bin/bash
+#SBATCH -A your-allocation      # Change to your allocation name
+#SBATCH -p standard             # Partition for controller job
+#SBATCH -c 1                    # Controller only needs 1 core
+#SBATCH -t 48:00:00             # Max runtime for controller
+#SBATCH --mem=4G                # Memory for controller
+#SBATCH -o caws_%j.out          # Output log
+#SBATCH -e caws_%j.err          # Error log
+#SBATCH -J caws_pipeline        # Job name
+
+module load snakemake
+module load miniforge
+
+snakemake --profile profiles/slurm --configfile config.json
+EOF
+
+# Submit the job
+sbatch run_caws.sh
+```
+
+Or run interactively in a terminal session:
+```bash
+module load snakemake
+module load miniforge
+
+snakemake --profile profiles/slurm --configfile config.json
 ```
 
 ---
 
-### 4. View Results  
+### 5. View Results  
 
 ```bash
 reports/cutntag_analysis_report.html
@@ -178,30 +218,58 @@ reports/cutntag_analysis_report.html
 
 ---
 
-## Running on SLURM  
+## Running on SLURM
 
 <details>
-<summary><b>Click to view SLURM command example</b></summary>
+<summary><b>Click to view SLURM execution details</b></summary>
+
+### Snakemake 9.x (Profile-based execution)
+
+**Step 1**: Configure the SLURM profile
+
+Edit `profiles/slurm/config.yaml` to set your allocation and partition:
+```yaml
+default-resources:
+  - slurm_account=your-allocation-name  # e.g., ratan-lab
+  - slurm_partition=your-partition      # e.g., standard
+```
+
+**Step 2**: Submit to SLURM
+
+Create a simple submission script:
+```bash
+#!/bin/bash
+#SBATCH -A your-allocation
+#SBATCH -p standard
+#SBATCH -c 1
+#SBATCH -t 48:00:00
+#SBATCH --mem=4G
+#SBATCH -o caws_%j.out
+#SBATCH -e caws_%j.err
+
+module load snakemake
+module load miniforge
+
+snakemake --profile profiles/slurm --configfile config.json
+```
+
+Then submit: `sbatch your_script.sh`
+
+**Alternative**: Run interactively
 
 ```bash
 module load snakemake
+module load miniforge
 
-snakemake \
-    --cores 1 \
-    --configfile config.json \
-    --conda-frontend mamba \
-    --latency-wait 60 \
-    --notemp \
-    --rerun-incomplete \
-    --reason \
-    --keep-going \
-    --jobs 100 \
-    --use-conda \
-    --conda-prefix /data/CAWS/environment \
-    --verbose \
-    --cluster-config clusterconfig.json \
-    --cluster "sbatch --partition {cluster.queue} -J {cluster.name} --cpus-per-task {cluster.nCPUs} --mem {cluster.memory} --time {cluster.maxTime} -o '{cluster.output}' -e '{cluster.error}' --mail-type=None --parsable -A {cluster.account}"
+snakemake --profile profiles/slurm --configfile config.json
 ```
+
+The profile (`profiles/slurm/config.yaml`) handles all cluster execution settings including:
+- Job submission to SLURM
+- Resource allocation per rule
+- Conda environment management
+- Job monitoring and resubmission
+
 </details>
 
 ---
