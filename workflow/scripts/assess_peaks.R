@@ -111,14 +111,16 @@ for (absname in as.character(snakemake@input[["peaks"]])) {
     bamFile = paste0(folder, "/", sample, ".sorted.qflt.bam")
 
     # Determine if sample is paired-end from samplesheet
+    # This logic must match the Python is_missing_read2() function in Snakefile
     sample_info <- samplesheet |> filter(sampleID == sample)
     is_paired <- if (nrow(sample_info) > 0) {
         read2_value <- sample_info$read2[1]
         # Check if read2 is missing/empty (indicates single-end)
-        !(is.na(read2_value) || trimws(tolower(as.character(read2_value))) %in% c("", "na", "n/a", "null", "none", "-", "nan"))
+        # List of values that indicate missing read2 (matches Python version)
+        missing_indicators <- c("", "na", "n/a", "null", "none", "-", "nan", "nil", "empty", "0", "false", "missing", "absent", "single", "se")
+        !(is.na(read2_value) || trimws(tolower(as.character(read2_value))) %in% missing_indicators)
     } else {
-        # Default to TRUE if sample not found (shouldn't happen)
-        TRUE
+        stop(paste("Sample", sample, "not found in samplesheet"))
     }
 
     fragment_counts = getCounts(bamFile, peak.gr, paired = is_paired, by_rg = FALSE, format = "bam")

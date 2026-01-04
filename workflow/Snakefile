@@ -107,6 +107,18 @@ def validate_mixed_samplesheet():
             if not pd.isna(row['read2']) and str(row['read2']).strip() not in ['', '-', 'NA', 'na', 'NULL', 'null', 'nan', 'NaN']:
                 warnings.append(f"Sample {sample_id}: Marked as single-end but has read2 value: {row['read2']}")
 
+    # Validate that experimental samples and their controls have compatible sequencing types
+    if config["igg_control"]:
+        for sample_id, row in samplesheet.iterrows():
+            if row['condition'] != 'Control':
+                group_controls = samplesheet[(samplesheet['group'] == row['group']) & (samplesheet['condition'] == 'Control')]
+                if len(group_controls) > 0:
+                    control = group_controls.iloc[0]
+                    if row['is_paired'] != control['is_paired']:
+                        exp_type = "paired-end" if row['is_paired'] else "single-end"
+                        ctrl_type = "paired-end" if control['is_paired'] else "single-end"
+                        errors.append(f"Sample {sample_id} ({exp_type}) has incompatible sequencing type with its control {control.name} ({ctrl_type})")
+
     # Validate that at least one experimental sample exists
     if len(EXPERIMENT) == 0:
         errors.append("No experimental samples found. At least one non-Control sample is required for peak calling.")
@@ -472,7 +484,9 @@ rule bam_to_bed_pe:
     threads: 2
     shell:
         """
-        # Paired-end processing: use -f 1 flag for paired reads
+        # Paired-end processing
+        # -f 1: Require read paired in sequencing
+        # -F 3852: Exclude unmapped(4), mate unmapped(8), not primary(256), QC-fail(512), duplicate(1024), supplementary(2048)
         samtools view -h -q {params.minq} -f 1 -F 3852 {input.bam} $(tr '\\n' ' ' < {params.chroms}) \
         | awk -F "\\t" '/^@/ {{print; next}} ($7=="=" && $9 <= 1000 && $9 >= -1000) {{print}}' \
         | samtools view -b \
@@ -540,7 +554,9 @@ rule bam_to_bed_se:
     threads: 2
     shell:
         """
-        # Single-end processing: use -F 3844 (remove paired-specific flags)
+        # Single-end processing
+        # -F 3844: Exclude unmapped(4), not primary(256), QC-fail(512), duplicate(1024), supplementary(2048)
+        # Note: Flag 8 (mate unmapped) is included but harmless for SE data
         samtools view -h -q {params.minq} -F 3844 {input.bam} $(tr '\\n' ' ' < {params.chroms}) \
         | samtools view -b \
         | bedtools intersect -abam - -b {input.blklist} -v \

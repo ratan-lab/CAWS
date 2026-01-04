@@ -689,7 +689,6 @@ process_macs3_peak_width_file <- function(file_path, file_suffix) {
 
 # some MACS3 se peak files can be empty since a model was not built.
 macs3_peak_files <- as.character(snakemake@input[["macs3_peaks"]]) |> map_chr(get_abs_path) |> keep(~ file.exists(.x) && file.info(.x)$size > 0)
-print(macs3_peak_files)
 macs3_width_data <- macs3_peak_files |> map_dfr(~ process_macs3_peak_width_file(.x, "_peaks.narrowPeak"))
 macs3_width_plot <- create_peak_width_plot(macs3_width_data, samplesheet, "MACS3")
 ggplotly(macs3_width_plot) |>
