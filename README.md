@@ -14,13 +14,14 @@
 
 ---
 
-## Why Use CAWS?  
+## Why Use CAWS?
 
-- **CUT&Tag Optimized** – Purpose-built for CUT&Tag data with specialized QC and peak-calling strategies  
-- **Comprehensive Analysis** – End-to-end workflow from raw reads to interactive visualizations  
-- **Dual Peak Calling** – Generates peak calls using both SEACR and MACS3 for robust peak detection  
-- **Interactive Reports** – HTML dashboards with Plotly-based visualizations  
-- **Reproducible** – Conda-based environment management for consistent results  
+- **CUT&Tag Optimized** – Purpose-built for CUT&Tag data with specialized QC and peak-calling strategies
+- **Flexible Input** – Supports single-end, paired-end, and mixed datasets in the same analysis
+- **Comprehensive Analysis** – End-to-end workflow from raw reads to interactive visualizations
+- **Dual Peak Calling** – Generates peak calls using both SEACR and MACS3 for robust peak detection
+- **Interactive Reports** – HTML dashboards with Plotly-based visualizations
+- **Reproducible** – Conda-based environment management for consistent results
 
 ---
 
@@ -50,12 +51,12 @@ CAWS is designed for:
 - **CPU**: ≥4 cores  
 - **OS**: Linux or macOS (cluster execution recommended)  
 
-### Input Data Requirements  
-- Paired-end **FASTQ** files (gzipped)  
-- Reference genome (**FASTA** with Bowtie2 index)  
-- **Annotation** file (**GTF**, optional for TSS enrichment)  
-- **Blacklist** regions (**BED**)  
-- **Sample metadata** (**TSV**)  
+### Input Data Requirements
+- **FASTQ** files (gzipped) — supports both **single-end** and **paired-end** sequencing data
+- Reference genome (**FASTA** with Bowtie2 index)
+- **Annotation** file (**GTF**, optional for TSS enrichment)
+- **Blacklist** regions (**BED**)
+- **Sample metadata** (**TSV**)
 
 ---
 
@@ -92,13 +93,19 @@ default-resources:
 
 ### 3. Prepare Analysis Configuration Files  
 
-**Sample Sheet (`samplesheet.tsv`)**  
+**Sample Sheet (`samplesheet.tsv`)**
+
+The pipeline supports **paired-end**, **single-end**, and **mixed** datasets. Specify single-end samples by using `-`, `NA`, or similar values in the `read2` column:
 
 ```tsv
 sampleID	condition	group	read1	read2
-sample1	Treatment	group1	/path/to/sample1_R1.fastq.gz	/path/to/sample1_R2.fastq.gz
-sample2	Control	group1	/path/to/sample2_R1.fastq.gz	/path/to/sample2_R2.fastq.gz
+sample1_PE	Treatment	group1	/path/to/sample1_R1.fastq.gz	/path/to/sample1_R2.fastq.gz
+sample2_SE	Treatment	group2	/path/to/sample2.fastq.gz	-
+sample3_PE	Control	group1	/path/to/sample3_R1.fastq.gz	/path/to/sample3_R2.fastq.gz
+sample4_SE	Control	group2	/path/to/sample4.fastq.gz	NA
 ```
+
+**Single-end indicators**: Use any of these values in the `read2` column to mark a sample as single-end: `-`, `NA`, `na`, `n/a`, `null`, `none`, `nan`, `nil`, `empty`, `0`, `false`, `missing`, `absent`, `single`, or `se`.
 
 **Configuration File (`config.json`)**  
 
@@ -274,17 +281,23 @@ The profile (`profiles/slurm/config.yaml`) handles all cluster execution setting
 
 ---
 
-## Features  
+## Features
 
-### Core Pipeline  
-- Quality control (**FastQC**)  
-- Adapter trimming (**Trim Galore**)  
-- Alignment (**Bowtie2**)  
-- Duplicate removal (**Picard**)  
-- Peak calling (**SEACR** & **MACS3**)  
-- Contamination detection (mtDNA, *E. coli*)  
-- Fragment size & correlation analysis  
-- FRiP score and reproducibility metrics  
+### Data Input Flexibility
+- **Single-End & Paired-End Support** – Process SE, PE, or mixed datasets seamlessly
+- **Automatic Detection** – Pipeline automatically identifies sequencing type from samplesheet
+- **SE/PE Compatibility Validation** – Ensures experimental samples and controls have matching sequencing types
+- **Optimized Processing** – Separate optimized workflows for SE and PE data with appropriate biological handling
+
+### Core Pipeline
+- Quality control (**FastQC**)
+- Adapter trimming (**Trim Galore**)
+- Alignment (**Bowtie2**)
+- Duplicate removal (**Picard**)
+- Peak calling (**SEACR** & **MACS3**)
+- Contamination detection (mtDNA, *E. coli*)
+- Fragment size & correlation analysis (PE only)
+- FRiP score and reproducibility metrics
 
 ### Enhanced Analysis (v2.0)  
 - **TSS enrichment profiling**  
@@ -294,7 +307,7 @@ The profile (`profiles/slurm/config.yaml`) handles all cluster execution setting
 
 ---
 
-## Output Structure  
+## Output Structure
 
 <details>
 <summary><b>Click to expand output directory layout</b></summary>
@@ -303,8 +316,8 @@ The profile (`profiles/slurm/config.yaml`) handles all cluster execution setting
 output_directory/
 ├── qc/                  # FastQC reports
 ├── trimmed/             # Adapter-trimmed reads
-├── alignments/          # BAM alignments
-├── dedupalignments/     # Deduplicated BAMs
+├── alignments/          # BAM alignments (deleted on successful completion)
+├── dedupalignments/     # Deduplicated BAMs (quality-filtered versions preserved)
 ├── bedalignments/       # BED files for peak calling
 ├── peaks/
 │   ├── seacr/           # SEACR peaks
@@ -316,6 +329,9 @@ output_directory/
 ├── annotations/         # GTF-based TSS data
 └── logs/                # Log files
 ```
+
+**Note on alignment cleanup**: Upon successful pipeline completion, the `alignments/` directory is automatically deleted to save disk space. Quality-filtered BAM files used for peak calling are preserved in `dedupalignments/` (if deduplication is enabled). If you need to retain the original alignment files, interrupt the pipeline before completion or modify the cleanup behavior in the Snakefile (lines 965-966).
+
 </details>
 
 ---
