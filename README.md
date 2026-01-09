@@ -107,12 +107,9 @@ sample4_SE	Control	group2	/path/to/sample4.fastq.gz	NA
 
 **Single-end indicators**: Use any of these values in the `read2` column to mark a sample as single-end: `-`, `NA`, `na`, `n/a`, `null`, `none`, `nan`, `nil`, `empty`, `0`, `false`, `missing`, `absent`, `single`, or `se`.
 
-**Configuration File (`config.json`)**  
+**Configuration File (`config.json`)**
 
-```bash
-cp config.example.json config.json
-# Edit config.json with your file paths and parameters
-```
+Edit `config.json` with your file paths and parameters. See the Configuration Details section below for a complete description of all parameters.
 
 ---
 
