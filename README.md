@@ -120,6 +120,8 @@ snakemake --cores 8 --use-conda --configfile config.json
 
 **SLURM Cluster Execution (recommended for large datasets)**
 
+**Option 1: Simple Execution with Profile**
+
 Submit as a SLURM job:
 ```bash
 # Create a submission script
@@ -134,23 +136,68 @@ cat > run_caws.sh << 'EOF'
 #SBATCH -e caws_%j.err          # Error log
 #SBATCH -J caws_pipeline        # Job name
 
-module load snakemake
+# Load required modules
 module load miniforge
+module load snakemake/9.8.1
 
-snakemake --profile profiles/slurm --configfile config.json
+# Run pipeline with profile
+snakemake \
+  --profile profiles/slurm \
+  --configfile config.json
 EOF
 
 # Submit the job
 sbatch run_caws.sh
 ```
 
-Or run interactively in a terminal session:
-```bash
-module load snakemake
-module load miniforge
+**Option 2: Advanced Execution with Custom Settings**
 
+For more control over execution and conda environment caching:
+```bash
+#!/bin/bash
+#SBATCH -A your-allocation
+#SBATCH -p standard
+#SBATCH -c 1
+#SBATCH -t 48:00:00
+#SBATCH --mem=4G
+#SBATCH -o caws_%j.out
+#SBATCH -e caws_%j.err
+#SBATCH -J caws_pipeline
+
+# Load required modules
+module load miniforge
+module load snakemake/9.8.1
+
+# Run pipeline with explicit parameters
+snakemake \
+  --profile /path/to/CAWS/profiles/slurm \
+  --snakefile /path/to/CAWS/workflow/Snakefile \
+  --configfile config.json \
+  --cores 1 \
+  --use-conda \
+  --conda-frontend mamba \
+  --conda-prefix /scratch/your-user/conda-envs \
+  --latency-wait 60 \
+  --rerun-incomplete \
+  --keep-going \
+  --jobs 100
+```
+
+**Interactive Execution:**
+```bash
+# Load modules
+module load miniforge
+module load snakemake/9.8.1
+
+# Run in current session (use screen or tmux recommended)
 snakemake --profile profiles/slurm --configfile config.json
 ```
+
+**Notes:**
+- `--conda-prefix` caches conda environments for faster subsequent runs
+- `--jobs 100` overrides the profile setting (default: 50)
+- `--notemp` can be added to preserve temporary files for debugging
+- Use absolute paths if running from a different directory
 
 ---
 
@@ -238,9 +285,30 @@ slurm:
   partition: your-partition      # e.g., standard
 ```
 
-**Step 2**: Submit to SLURM
+**Step 2**: Load required modules
 
-Create a simple submission script:
+```bash
+module load miniforge
+module load snakemake/9.8.1
+```
+
+**Step 3**: Execute the pipeline
+
+**Simple execution:**
+```bash
+snakemake --profile profiles/slurm --configfile config.json
+```
+
+**Advanced execution with conda caching:**
+```bash
+snakemake \
+  --profile profiles/slurm \
+  --configfile config.json \
+  --conda-prefix /scratch/$USER/conda-envs \
+  --jobs 100
+```
+
+**As a SLURM job:**
 ```bash
 #!/bin/bash
 #SBATCH -A your-allocation
@@ -251,28 +319,41 @@ Create a simple submission script:
 #SBATCH -o caws_%j.out
 #SBATCH -e caws_%j.err
 
-module load snakemake
 module load miniforge
+module load snakemake/9.8.1
 
-snakemake --profile profiles/slurm --configfile config.json
+snakemake \
+  --profile profiles/slurm \
+  --configfile config.json \
+  --conda-prefix /scratch/$USER/conda-envs
 ```
 
-Then submit: `sbatch your_script.sh`
+### Profile Configuration Details
 
-**Alternative**: Run interactively
+The profile (`profiles/slurm/config.yaml`) handles:
+- Job submission to SLURM with executor plugin
+- Resource allocation per rule (memory, CPU, runtime)
+- Conda environment management with mamba
+- Job monitoring and resubmission on failure
+- Concurrent job limits (default: 50, override with `--jobs`)
 
+### Useful Options
+
+- `--conda-prefix /path/to/envs`: Cache conda environments (recommended for repeated runs)
+- `--jobs N`: Override maximum concurrent SLURM jobs (default: 50)
+- `--notemp`: Keep temporary files for debugging
+- `--rerun-incomplete`: Rerun incomplete jobs (useful after interruptions)
+- `--dryrun` or `-n`: Preview execution without running
+- `--printshellcmds`: Show shell commands (already enabled in profile)
+
+### Monitoring
+
+Monitor jobs with:
 ```bash
-module load snakemake
-module load miniforge
-
-snakemake --profile profiles/slurm --configfile config.json
+squeue -u $USER           # Check job status
+tail -f caws_*.out        # Watch controller output
+tail -f logs/rulename/*   # Watch specific rule logs
 ```
-
-The profile (`profiles/slurm/config.yaml`) handles all cluster execution settings including:
-- Job submission to SLURM
-- Resource allocation per rule
-- Conda environment management
-- Job monitoring and resubmission
 
 </details>
 
