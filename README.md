@@ -39,11 +39,14 @@ CAWS is designed for:
 
 ### Required Software
 - **Snakemake** ≥9.0.0 (tested with 9.8.1)
-- **Conda** or **Mamba**
+- **Conda** ≥24.7.1 or **Mamba** ≥1.5.0 (recommended)
 - **Python** ≥3.7
 - **R** ≥4.0
 
-**Note**: CAWS requires Snakemake 9.0 or later for profile-based SLURM execution with executor plugins.  
+**Important Notes**:
+- Snakemake 9.0+ requires Conda ≥24.7.1 for environment management
+- **Mamba is recommended** as the conda frontend for faster environment creation (already configured in profile)
+- If you encounter conda version errors, see Troubleshooting section below  
 
 ### System Requirements  
 - **Storage**: ~50 GB free space (typical dataset)  
@@ -482,6 +485,129 @@ Enable by specifying a GTF file in your configuration:
 - **MACS3** — Model-based ChIP-seq analysis  
 - **FastQC**, **Trim Galore**, **Picard**, **deepTools**  
 - **R packages** — `ggplot2`, `plotly`, `flexdashboard`  
+
+---
+
+## Troubleshooting
+
+<details>
+<summary><b>Click to view common issues and solutions</b></summary>
+
+### Conda Version Error
+
+**Error**: `CreateCondaEnvironmentException: Conda must be version 24.7.1 or later, found version X.X.X`
+
+**Solution 1: Update Conda (Recommended)**
+```bash
+# Update conda in your base environment
+conda update -n base conda
+
+# Verify version
+conda --version  # Should be ≥24.7.1
+```
+
+**Solution 2: Install Conda in Snakemake Environment**
+```bash
+# Activate your snakemake environment
+conda activate caws-snakemake
+
+# Install updated conda
+conda install -c conda-forge conda>=24.7.1
+
+# Verify
+conda --version
+```
+
+**Solution 3: Use Mamba (Already Configured)**
+
+The pipeline is already configured to use mamba as the conda frontend. Ensure mamba is installed and accessible:
+```bash
+# Install mamba if not available
+conda install -c conda-forge mamba
+
+# Verify mamba is available
+which mamba
+mamba --version
+```
+
+The profile automatically uses mamba (`conda-frontend: mamba` in `profiles/slurm/config.yaml`), which bypasses most conda version issues.
+
+### Module Load Errors
+
+**Error**: `module: command not found` or modules don't load
+
+**Solution**: Ensure you're on a system with environment modules. If running locally without modules:
+```bash
+# Skip module loading, just activate conda/mamba directly
+conda activate your-snakemake-env
+snakemake --cores 8 --use-conda --configfile config.json
+```
+
+### SLURM Job Failures
+
+**Error**: Jobs fail with memory or time limits
+
+**Solution**: Adjust resource allocations in `profiles/slurm/config.yaml`:
+```yaml
+set-resources:
+  rule_name:
+    mem_mb: 40000      # Increase memory
+    runtime: 600       # Increase time (minutes)
+```
+
+### Empty Peak Files
+
+**Issue**: MACS3 produces empty peak files for some samples
+
+**Cause**: MACS3 may fail to build a model for low-quality or single-end samples
+
+**Expected Behavior**: The pipeline handles this gracefully by creating empty placeholder files. Check the logs:
+```bash
+cat logs/call_macs_peaks_se/sample_name.log
+```
+
+If this affects many samples, consider adjusting `macs3_qvalue_no_control` in config.json to a less stringent value (e.g., 0.01 instead of 0.001).
+
+### Conda Environment Creation Hangs
+
+**Issue**: Environment creation takes very long or appears stuck
+
+**Solution**: Use mamba instead of conda
+```bash
+# The profile already uses mamba, but ensure it's installed:
+conda install -c conda-forge mamba
+
+# Or run with explicit mamba specification:
+snakemake --use-conda --conda-frontend mamba --configfile config.json
+```
+
+### Permission Denied Errors
+
+**Issue**: Cannot write to output directory or conda-prefix
+
+**Solution**: Ensure you have write permissions:
+```bash
+# Check output directory
+ls -ld /path/to/outdir
+
+# Use a directory in your scratch space for conda-prefix:
+snakemake --conda-prefix /scratch/$USER/conda-envs --configfile config.json
+```
+
+### File Not Found Errors
+
+**Issue**: Input files (FASTQ, reference, etc.) not found
+
+**Solution**:
+1. Check all paths in `config.json` are absolute paths
+2. Verify files exist and are readable:
+```bash
+# Test file access
+ls -lh /path/to/file
+```
+3. Ensure paths don't contain spaces or special characters
+
+</details>
 
 ---
 
