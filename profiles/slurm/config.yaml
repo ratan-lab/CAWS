@@ -20,6 +20,8 @@ default-resources:
   - runtime=180        # minutes
   - mem_mb=5000
   - threads=1
+  - slurm_account=ratan
+  - slurm_partition=standard
 
 # Rule-specific resource overrides
 set-resources:
@@ -91,7 +93,7 @@ set-resources:
 
 # SLURM executor plugin configuration
 slurm:
-  account:  # TODO: Set your allocation name (e.g., ratan-lab)
-  partition: # TODO: Set your partition (e.g., standard)
+  account: "ratan" # TODO: Set your allocation name (e.g., ratan-lab)
+  partition: "standard" # TODO: Set your partition (e.g., standard)
   extra: "--parsable"
 

@@ -82,10 +82,12 @@ cd CAWS
 Edit `profiles/slurm/config.yaml` to set your SLURM allocation and partition:
 
 ```yaml
-slurm:
-  account: your-allocation-name  # e.g., ratan-lab
-  partition: your-partition      # e.g., standard
-  extra: "--parsable"
+default-resources:
+  - runtime=180
+  - mem_mb=5000
+  - threads=1
+  - slurm_account=your-allocation-name  # e.g., ratan
+  - slurm_partition=your-partition      # e.g., standard
 ```
 
 **Skip this step** if running locally (not on a cluster).
@@ -281,11 +283,14 @@ reports/cutntag_analysis_report.html
 
 **Step 1**: Configure the SLURM profile
 
-Edit `profiles/slurm/config.yaml` to set your allocation and partition:
+Edit `profiles/slurm/config.yaml` to set your allocation and partition in the `default-resources` section:
 ```yaml
-slurm:
-  account: your-allocation-name  # e.g., ratan-lab
-  partition: your-partition      # e.g., standard
+default-resources:
+  - runtime=180
+  - mem_mb=5000
+  - threads=1
+  - slurm_account=your-allocation-name  # e.g., ratan
+  - slurm_partition=your-partition      # e.g., standard
 ```
 
 **Step 2**: Load required modules
