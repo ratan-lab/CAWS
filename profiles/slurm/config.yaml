@@ -92,8 +92,7 @@ set-resources:
     runtime: 120
 
 # SLURM executor plugin configuration
+# Note: account and partition are configured in default-resources above
 slurm:
-  account: "ratan" # TODO: Set your allocation name (e.g., ratan-lab)
-  partition: "standard" # TODO: Set your partition (e.g., standard)
   extra: "--parsable"
 
