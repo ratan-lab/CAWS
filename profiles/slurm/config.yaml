@@ -3,8 +3,8 @@
 
 # Executor configuration
 executor: slurm
-jobs: 50
-latency-wait: 120
+jobs: 100
+latency-wait: 60
 
 # Conda settings
 use-conda: true
@@ -14,11 +14,13 @@ conda-frontend: mamba
 rerun-incomplete: true
 keep-going: true
 printshellcmds: true
+quiet:
+  - progress  # Suppress repetitive progress messages
 
 # Default resources for all rules
 default-resources:
   - runtime=180        # minutes
-  - mem_mb=5000
+  - mem_mb=9000
   - threads=1
   - slurm_account=     # TODO: Set your allocation name (e.g., ratan-lab)
   - slurm_partition=   # TODO: Set your partition (e.g., standard)
@@ -34,12 +36,12 @@ set-resources:
   trim_adapters:
     threads: 4
     mem_mb: 8000
-    runtime: 180
+    runtime: 480
 
   align_reads:
     threads: 8
     mem_mb: 30000
-    runtime: 480
+    runtime: 960
 
   convert_to_binary:
     threads: 2
@@ -49,7 +51,7 @@ set-resources:
   find_ecoli_reads:
     threads: 4
     mem_mb: 8000
-    runtime: 180
+    runtime: 480
 
   bam_to_bed:
     threads: 2
