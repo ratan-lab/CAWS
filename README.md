@@ -214,6 +214,217 @@ reports/cutntag_analysis_report.html
 
 ---
 
+## Example Analysis with Public Data
+
+This example demonstrates a complete CAWS analysis using publicly available CUT&Tag data. We'll analyze H3K4me3 (active promoter mark) samples from a published study.
+
+### Dataset Information
+
+- **Study**: CUT&Tag profiling of H3K4me3 in human K562 cells
+- **Data Source**: NCBI GEO (Gene Expression Omnibus)
+- **Sample Size**: 4 samples (2 H3K4me3 + 2 IgG controls)
+- **Sequencing**: Paired-end Illumina
+- **Reference**: Human (hg38)
+
+### Step 1: Download Example Data
+
+```bash
+# Create working directory
+mkdir -p cutntag_example && cd cutntag_example
+
+# Download FASTQ files from SRA using SRA Toolkit
+# Install SRA Toolkit if needed: conda install -c bioconda sra-tools
+
+# H3K4me3 treatment samples (example accessions)
+fastq-dump --split-files --gzip SRR13577661
+fastq-dump --split-files --gzip SRR13577662
+
+# IgG control samples
+fastq-dump --split-files --gzip SRR13577663
+fastq-dump --split-files --gzip SRR13577664
+
+# This will create files like:
+# SRR13577661_1.fastq.gz, SRR13577661_2.fastq.gz (treatment replicate 1)
+# SRR13577662_1.fastq.gz, SRR13577662_2.fastq.gz (treatment replicate 2)
+# etc.
+```
+
+**Note**: Replace the SRR accessions above with actual accessions from your chosen GEO dataset. To find CUT&Tag datasets, visit [NCBI GEO](https://www.ncbi.nlm.nih.gov/geo/) and search for "CUT&Tag".
+
+### Step 2: Prepare Reference Files
+
+```bash
+# Download human hg38 reference genome
+wget https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz
+gunzip hg38.fa.gz
+
+# Build Bowtie2 index
+bowtie2-build hg38.fa hg38_index
+
+# Index FASTA file
+samtools faidx hg38.fa
+
+# Download blacklist regions
+wget https://github.com/Boyle-Lab/Blacklist/raw/master/lists/hg38-blacklist.v2.bed.gz
+gunzip hg38-blacklist.v2.bed.gz
+
+# Download chromosome sizes
+wget https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.chrom.sizes
+
+# Download GTF annotation for TSS enrichment (optional)
+wget https://ftp.ensembl.org/pub/release-110/gtf/homo_sapiens/Homo_sapiens.GRCh38.110.gtf.gz
+gunzip Homo_sapiens.GRCh38.110.gtf.gz
+
+# E. coli reference (for spike-in normalization)
+wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/005/845/GCF_000005845.2_ASM584v2/GCF_000005845.2_ASM584v2_genomic.fna.gz
+gunzip GCF_000005845.2_ASM584v2_genomic.fna.gz
+bowtie2-build GCF_000005845.2_ASM584v2_genomic.fna ecoli_index
+```
+
+### Step 3: Create Sample Sheet
+
+Create `samplesheet.tsv`:
+
+```tsv
+sampleID	condition	group	read1	read2
+H3K4me3_rep1	Treatment	H3K4me3	/path/to/SRR13577661_1.fastq.gz	/path/to/SRR13577661_2.fastq.gz
+H3K4me3_rep2	Treatment	H3K4me3	/path/to/SRR13577662_1.fastq.gz	/path/to/SRR13577662_2.fastq.gz
+IgG_rep1	Control	H3K4me3	/path/to/SRR13577663_1.fastq.gz	/path/to/SRR13577663_2.fastq.gz
+IgG_rep2	Control	H3K4me3	/path/to/SRR13577664_1.fastq.gz	/path/to/SRR13577664_2.fastq.gz
+```
+
+**Important**: Replace `/path/to/` with absolute paths to your downloaded FASTQ files.
+
+### Step 4: Create Configuration File
+
+Create `config.json`:
+
+```json
+{
+    "samplesheet": "samplesheet.tsv",
+    "reference_fa": "/path/to/hg38.fa",
+    "bt2_idx": "/path/to/hg38_index",
+    "reference_fai": "/path/to/hg38.fa.fai",
+    "chromosome_file": "/path/to/hg38.chrom.sizes",
+    "blacklist": "/path/to/hg38-blacklist.v2.bed",
+    "ecoli_reference": "/path/to/GCF_000005845.2_ASM584v2_genomic.fna",
+    "ecoli_bt2_idx": "/path/to/ecoli_index",
+    "gtf_file": "/path/to/Homo_sapiens.GRCh38.110.gtf",
+    "trim_adapters": true,
+    "igg_control": true,
+    "mt_chrom": "chrM",
+    "dedup": true,
+    "minquality": 10,
+    "fragment_min": 0,
+    "fragment_max": 700,
+    "genome_size": "hs",
+    "seacr_qvalue": 0.01,
+    "macs3_qvalue_with_control": 0.05,
+    "macs3_qvalue_no_control": 0.01,
+    "heatmap_window": 3000,
+    "outdir": "results"
+}
+```
+
+### Step 5: Run the Pipeline
+
+**Local execution** (for testing with small datasets):
+
+```bash
+# Clone CAWS
+git clone https://github.com/ratan-lab/CAWS.git
+
+# Run pipeline
+snakemake \
+  --snakefile CAWS/workflow/Snakefile \
+  --configfile config.json \
+  --cores 8 \
+  --use-conda \
+  --conda-frontend mamba
+```
+
+**SLURM cluster execution** (recommended):
+
+```bash
+# Edit CAWS/profiles/slurm/config.yaml to set your account and partition
+
+# Submit as batch job
+cat > run_example.sh << 'EOF'
+#!/bin/bash
+#SBATCH -A your-allocation
+#SBATCH -p standard
+#SBATCH -c 1
+#SBATCH -t 12:00:00
+#SBATCH --mem=4G
+#SBATCH -o example_%j.out
+#SBATCH -J caws_example
+
+module load miniforge
+module load snakemake/9.8.1
+
+snakemake \
+  --snakefile CAWS/workflow/Snakefile \
+  --profile CAWS/profiles/slurm \
+  --configfile config.json
+EOF
+
+sbatch run_example.sh
+```
+
+### Step 6: Expected Results
+
+**Runtime**: Approximately 2-4 hours on HPC with 8 cores (depends on read depth)
+
+**Output Structure**:
+```
+results/
+├── fastqc/                          # Quality control reports
+├── trimmed/                         # Adapter-trimmed reads (if enabled)
+├── aligned/                         # Bowtie2 alignments (BAM files)
+├── bedgraph/                        # Coverage tracks
+├── peaks/
+│   ├── seacr/                      # SEACR peak calls
+│   └── macs3/                      # MACS3 peak calls
+├── frip/                            # Fraction of Reads in Peaks
+├── heatmaps/                        # Peak visualization heatmaps
+└── reports/
+    └── cutntag_analysis_report.html # Interactive HTML report
+```
+
+**Key Outputs**:
+1. **Peak files**: `results/peaks/seacr/H3K4me3_rep1.stringent.bed`
+2. **Coverage tracks**: `results/bedgraph/H3K4me3_rep1.bedgraph`
+3. **QC metrics**: Alignment rates, FRiP scores, TSS enrichment
+4. **Final report**: `results/reports/cutntag_analysis_report.html`
+
+**Expected QC Metrics for H3K4me3**:
+- **Alignment rate**: >80% (high-quality CUT&Tag)
+- **FRiP score**: 30-60% (active histone marks typically have high FRiP)
+- **TSS enrichment**: >5 (H3K4me3 is enriched at promoters)
+- **Fragment size**: Peak at ~150-200 bp (nucleosomal)
+
+### Step 7: Explore Results
+
+Open the HTML report in a web browser:
+
+```bash
+# On local machine
+open results/reports/cutntag_analysis_report.html
+
+# Or copy from HPC to local
+scp user@hpc:~/cutntag_example/results/reports/cutntag_analysis_report.html .
+```
+
+The interactive report includes:
+- Sample QC summary table
+- Alignment statistics
+- Fragment size distributions
+- Peak calling summary
+- Heatmaps of signal at peaks
+- TSS enrichment plots
+
+---
+
 ## Configuration Details  
 
 <details>

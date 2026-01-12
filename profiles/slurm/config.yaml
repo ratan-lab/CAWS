@@ -38,11 +38,16 @@ set-resources:
     mem_mb: 8000
     runtime: 480
 
-  align_reads:
+  align_reads_pe:
     threads: 8
     mem_mb: 30000
     runtime: 960
 
+  align_reads_se:
+    threads: 8
+    mem_mb: 30000
+    runtime: 960
+ 
   convert_to_binary:
     threads: 2
     mem_mb: 8000
