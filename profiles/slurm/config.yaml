@@ -102,3 +102,7 @@ set-resources:
 slurm:
   extra: "--parsable"
 
+# Job status checking - use sacct for more reliable status queries
+slurm-status-command: sacct
+
+
