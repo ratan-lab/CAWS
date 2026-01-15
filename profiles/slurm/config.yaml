@@ -99,8 +99,7 @@ set-resources:
     runtime: 120
 
 # SLURM executor plugin configuration
-slurm:
-  extra: "--parsable"
-  status_command: sacct  # Force sacct instead of squeue for job status
+slurm_extra: "--parsable"
+slurm_status_command: sacct  # Force sacct instead of squeue for job status
 
 
