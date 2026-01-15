@@ -101,8 +101,6 @@ set-resources:
 # SLURM executor plugin configuration
 slurm:
   extra: "--parsable"
-
-# Job status checking - use sacct for more reliable status queries
-slurm-status-command: sacct
+  status_command: sacct  # Force sacct instead of squeue for job status
 
 
