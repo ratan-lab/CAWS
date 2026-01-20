@@ -142,8 +142,9 @@ cat > run_caws.sh << 'EOF'
 #SBATCH -J caws_pipeline        # Job name
 
 # Load required modules
-module load miniforge
-module load snakemake/9.8.1
+module load miniforge/24.11.3-py3.12 snakemake/9.8.1
+conda env create -f ../CAWS/envs/snakemake-runner.yaml
+conda activate caws-snakemake
 
 # Run pipeline with profile
 snakemake \
@@ -170,8 +171,9 @@ For more control over execution and conda environment caching:
 #SBATCH -J caws_pipeline
 
 # Load required modules
-module load miniforge
-module load snakemake/9.8.1
+module load miniforge/24.11.3-py3.12 snakemake/9.8.1
+conda env create -f ../CAWS/envs/snakemake-runner.yaml
+conda activate caws-snakemake
 
 # Run pipeline with explicit parameters
 snakemake \
@@ -191,8 +193,9 @@ snakemake \
 **Interactive Execution:**
 ```bash
 # Load modules
-module load miniforge
-module load snakemake/9.8.1
+module load miniforge/24.11.3-py3.12 snakemake/9.8.1
+conda env create -f ../CAWS/envs/snakemake-runner.yaml
+conda activate caws-snakemake
 
 # Run in current session (use screen or tmux recommended)
 snakemake --profile profiles/slurm --configfile config.json
