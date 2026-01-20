@@ -45,12 +45,12 @@ set-resources:
   align_reads_pe:
     threads: 8
     mem_mb: 30000
-    runtime: 960
+    runtime: 1400
 
   align_reads_se:
     threads: 8
     mem_mb: 30000
-    runtime: 960
+    runtime: 1400
  
   convert_to_binary:
     threads: 2
