@@ -143,7 +143,7 @@ cat > run_caws.sh << 'EOF'
 
 # Load required modules
 module load miniforge/24.11.3-py3.12 snakemake/9.8.1
-conda env create -f ../CAWS/envs/snakemake-runner.yaml
+conda env create -f envs/snakemake-runner.yaml
 conda activate caws-snakemake
 
 # Run pipeline with profile
@@ -172,7 +172,7 @@ For more control over execution and conda environment caching:
 
 # Load required modules
 module load miniforge/24.11.3-py3.12 snakemake/9.8.1
-conda env create -f ../CAWS/envs/snakemake-runner.yaml
+conda env create -f envs/snakemake-runner.yaml
 conda activate caws-snakemake
 
 # Run pipeline with explicit parameters
@@ -193,7 +193,7 @@ snakemake \
 ```bash
 # Load modules
 module load miniforge/24.11.3-py3.12 snakemake/9.8.1
-conda env create -f ../CAWS/envs/snakemake-runner.yaml
+conda env create -f envs/snakemake-runner.yaml
 conda activate caws-snakemake
 
 # Run in current session (use screen or tmux recommended)
