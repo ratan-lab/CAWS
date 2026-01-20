@@ -182,7 +182,6 @@ snakemake \
   --configfile config.json \
   --cores 1 \
   --use-conda \
-  --conda-frontend mamba \
   --conda-prefix /scratch/your-user/conda-envs \
   --latency-wait 60 \
   --rerun-incomplete \
@@ -342,8 +341,7 @@ snakemake \
   --snakefile CAWS/workflow/Snakefile \
   --configfile config.json \
   --cores 8 \
-  --use-conda \
-  --conda-frontend mamba
+  --use-conda
 ```
 
 **SLURM cluster execution** (recommended):
@@ -555,7 +553,6 @@ snakemake \
 The profile (`profiles/slurm/config.yaml`) handles:
 - Job submission to SLURM with executor plugin
 - Resource allocation per rule (memory, CPU, runtime)
-- Conda environment management with mamba
 - Job monitoring and resubmission on failure
 - Concurrent job limits (default: 50, override with `--jobs`)
 
@@ -737,27 +734,13 @@ conda install -c conda-forge conda>=24.7.1
 conda --version
 ```
 
-**Solution 3: Use Mamba (Already Configured)**
-
-The pipeline is already configured to use mamba as the conda frontend. Ensure mamba is installed and accessible:
-```bash
-# Install mamba if not available
-conda install -c conda-forge mamba
-
-# Verify mamba is available
-which mamba
-mamba --version
-```
-
-The profile automatically uses mamba (`conda-frontend: mamba` in `profiles/slurm/config.yaml`), which bypasses most conda version issues.
-
 ### Module Load Errors
 
 **Error**: `module: command not found` or modules don't load
 
 **Solution**: Ensure you're on a system with environment modules. If running locally without modules:
 ```bash
-# Skip module loading, just activate conda/mamba directly
+# Skip module loading, just activate conda directly
 conda activate your-snakemake-env
 snakemake --cores 8 --use-conda --configfile config.json
 ```
@@ -795,9 +778,6 @@ If this affects many samples, consider adjusting `macs3_qvalue_no_control` in co
 ```bash
 # The profile already uses mamba, but ensure it's installed:
 conda install -c conda-forge mamba
-
-# Or run with explicit mamba specification:
-snakemake --use-conda --conda-frontend mamba --configfile config.json
 ```
 
 ### Permission Denied Errors
