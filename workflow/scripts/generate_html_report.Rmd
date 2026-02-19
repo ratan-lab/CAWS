@@ -304,33 +304,42 @@ Coverage Similarity{data-icon="fa-project-diagram"}
 process_coverage_files <- function(coverage_files) {
   if (length(coverage_files) == 0) return(tibble())
 
-  coverage_list <- coverage_files |>
-    map(~ {
-      sample_name <- str_remove(basename(.x), ".bin.bed")
-      tryCatch({
-        read_delim(.x, col_names = c("chrom", "start", "coverage"),
-                  show_col_types = FALSE, delim = "\t") |>
-          mutate(bin = paste(chrom, start, sep = "_")) |>
-          select(chrom, bin, !!sample_name := coverage)
-      }, error = function(e) tibble())
-    })
+  # Read the first file to establish bin coordinates and sample row indices upfront.
+  first_dt <- tryCatch(
+    fread(coverage_files[[1]], col.names = c("chrom", "start", "coverage")),
+    error = function(e) NULL
+  )
+  if (is.null(first_dt) || nrow(first_dt) == 0) return(tibble())
 
-  coverage_list <- coverage_list[map_lgl(coverage_list, ~ nrow(.x) > 0)]
-  if (length(coverage_list) == 0) return(tibble())
+  # Subsample before any merging to avoid building a genome-wide table.
+  n_bins    <- nrow(first_dt)
+  sample_idx <- if (n_bins > 50000) sort(sample.int(n_bins, 50000)) else seq_len(n_bins)
 
-  coverage_list <- lapply(coverage_list, as.data.table)
-  Reduce(function(x, y) merge(x, y, by = c("chrom", "bin"), all = TRUE), coverage_list)
+  first_name <- str_remove(basename(coverage_files[[1]]), ".bin.bed")
+  result <- data.table(
+    chrom = first_dt$chrom[sample_idx],
+    bin   = paste(first_dt$chrom[sample_idx], first_dt$start[sample_idx], sep = "_")
+  )
+  result[, (first_name) := first_dt$coverage[sample_idx]]
+
+  # All bin BED files share the same bin order (same genome, same pipeline step),
+  # so read only the coverage column for remaining files and cbind — no join needed.
+  for (f in coverage_files[-1]) {
+    sname <- str_remove(basename(f), ".bin.bed")
+    cov <- tryCatch(
+      fread(f, select = 3L, col.names = "coverage")$coverage[sample_idx],
+      error = function(e) rep(NA_real_, length(sample_idx))
+    )
+    result[, (sname) := cov]
+  }
+
+  result
 }
 
 coverage_files <- as.character(snakemake@input[["coverage_bins"]]) |> map_chr(get_abs_path)
 coverage_data <- process_coverage_files(coverage_files)
 
 if (nrow(coverage_data) > 0) {
-  # Sample data if too large
-  if (nrow(coverage_data) > 100000) {
-    coverage_data <- coverage_data |> sample_n(50000)
-  }
-
   # Calculate correlation matrix
   correlation_matrix <- coverage_data |>
     select(-c("chrom", "bin")) |>
