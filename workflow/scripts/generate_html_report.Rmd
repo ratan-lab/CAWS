@@ -135,7 +135,7 @@ if (nrow(consolidated) > 0) {
     select(-c(seacr_peakN, macs3_peakN, seacr_FRiP, macs3_FRiP, seacr_median_gc, macs3_median_gc))
 
   if (!is.null(tss_enrichment) && nrow(tss_enrichment) > 0) {
-    summary_stats <- left_join(summary_stats, tss_enrichment, by = c("sampleID" = "sample_id"))
+    summary_stats <- left_join(summary_stats, tss_enrichment, by = c("sampleID" = "sample_id")) |> distinct()
   }
 
   create_enhanced_datatable(
