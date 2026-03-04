@@ -131,8 +131,8 @@ for (absname in as.character(snakemake@input[["peaks"]])) {
 df <- left_join(peakF, samplesheet) |>
       select(sampleID, condition, inPeakN) |>
       left_join(stats, by=c("sampleID"="Sample")) |>
-      select(sampleID, condition, inPeakN, MappedFragNum) |>
-      mutate(FRiP = round(inPeakN * 100.0 /MappedFragNum, 2))
+      select(sampleID, condition, inPeakN, UniqueFragNum) |>
+      mutate(FRiP = round(inPeakN * 100.0 /UniqueFragNum, 2))
 df |> write_tsv(as.character(snakemake@output[["peakF"]]))
 
 # GC Content Analysis
