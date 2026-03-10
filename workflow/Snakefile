@@ -761,7 +761,8 @@ rule assess_peaks:
     params:
         samplesheet=config["samplesheet"],
         subdir="dedupalignments" if config["dedup"] else "alignments",
-        method="SEACR"
+        method="SEACR",
+        dedup=config["dedup"]
     script:
         "scripts/assess_peaks.R"
 
@@ -781,7 +782,8 @@ use rule assess_peaks as assess_macs_peaks with:
     params:
         samplesheet=config["samplesheet"],
         subdir="dedupalignments" if config["dedup"] else "alignments",
-        method="MACS"
+        method="MACS",
+        dedup=config["dedup"]
 
 rule consolidate_stats:
     input:

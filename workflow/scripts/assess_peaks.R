@@ -10,6 +10,7 @@ samplesheet <- read_tsv(as.character(snakemake@params[["samplesheet"]]))
 stats <- read_tsv(as.character(snakemake@input[["stats"]]))
 folder <- as.character(snakemake@params[["subdir"]])
 method <- as.character(snakemake@params[["method"]])
+dedup <- as.logical(snakemake@params[["dedup"]])
 
 suffix <- NA
 if (method == "SEACR") {
@@ -128,11 +129,15 @@ for (absname in as.character(snakemake@input[["peaks"]])) {
     peakF = tibble(inPeakN=inPeakN, sampleID=sample) |> bind_rows(peakF)
 }
 
+frag_denom_col <- if (dedup) "UniqueFragNum" else "MappedFragNum"
+
 df <- left_join(peakF, samplesheet) |>
       select(sampleID, condition, inPeakN) |>
       left_join(stats, by=c("sampleID"="Sample")) |>
-      select(sampleID, condition, inPeakN, UniqueFragNum) |>
-      mutate(FRiP = round(inPeakN * 100.0 /UniqueFragNum, 2))
+      select(sampleID, condition, inPeakN, all_of(frag_denom_col)) |>
+      rename(fragDenom = all_of(frag_denom_col)) |>
+      mutate(FRiP = round(inPeakN * 100.0 / fragDenom, 2)) |>
+      select(-fragDenom)
 df |> write_tsv(as.character(snakemake@output[["peakF"]]))
 
 # GC Content Analysis
