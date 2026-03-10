@@ -2,6 +2,7 @@
 
 library(tidyverse)
 library(GenomicRanges)
+library(Rsamtools)
 library(viridis)
 library(chromVAR)
 
@@ -10,7 +11,6 @@ samplesheet <- read_tsv(as.character(snakemake@params[["samplesheet"]]))
 stats <- read_tsv(as.character(snakemake@input[["stats"]]))
 folder <- as.character(snakemake@params[["subdir"]])
 method <- as.character(snakemake@params[["method"]])
-dedup <- as.logical(snakemake@params[["dedup"]])
 
 suffix <- NA
 if (method == "SEACR") {
@@ -28,8 +28,8 @@ peakF = tibble()
 for (absname in as.character(snakemake@input[["peaks"]])) {
     if (file.size(absname) == 0L) next
     filename = basename(absname)
-    sample = str_split(filename, suffix)[[1]][1]
-    peakInfo = read.table(absname, header = FALSE, fill = TRUE)  |> mutate(width = abs(V3-V2))
+    sample = str_split(filename, suffix, fixed = TRUE)[[1]][1]
+    peakInfo = read.table(absname, header = FALSE, fill = TRUE) |> mutate(width = V3 - V2) |> filter(width > 0)
     peakN = tibble(peakN=nrow(peakInfo), sampleID=sample) |> bind_rows(peakN)
     peakW = tibble(width=peakInfo$width, sampleID=sample) |> bind_rows(peakW)
 }
@@ -72,15 +72,15 @@ for (absname1 in as.character(snakemake@input[["peaks"]])) {
         filename1 = basename(absname1)
         filename2 = basename(absname2)
 
-        sample1 = str_split(filename1, suffix)[[1]][1]
-        sample2 = str_split(filename2, suffix)[[1]][1]
+        sample1 = str_split(filename1, suffix, fixed = TRUE)[[1]][1]
+        sample2 = str_split(filename2, suffix, fixed = TRUE)[[1]][1]
 
         peakInfo1 = read.table(absname1, header = FALSE, fill = TRUE)  
         peakInfo2 = read.table(absname2, header = FALSE, fill = TRUE)  
     
         peakInfo1.gr = GRanges(peakInfo1$V1, IRanges(start = peakInfo1$V2, end = peakInfo1$V3), strand = "*")
         peakInfo2.gr = GRanges(peakInfo2$V1, IRanges(start = peakInfo2$V2, end = peakInfo2$V3), strand = "*")
-        overlap.gr = peakInfo1.gr[findOverlaps(peakInfo1.gr, peakInfo2.gr)@from]
+        overlap.gr = peakInfo1.gr[unique(findOverlaps(peakInfo1.gr, peakInfo2.gr)@from)]
 
         peakO = tibble(sample1=sample1, sample2=sample2, overlap=length(overlap.gr)) |> bind_rows(peakO)
     }
@@ -105,7 +105,7 @@ df |> write_tsv(as.character(snakemake@output[["peakR"]]))
 for (absname in as.character(snakemake@input[["peaks"]])) {
     if (file.size(absname) == 0L) next
     filename = basename(absname)
-    sample = str_split(filename, suffix)[[1]][1]
+    sample = str_split(filename, suffix, fixed = TRUE)[[1]][1]
 
     peakRes = read.table(absname, header = FALSE, fill = TRUE)
     peak.gr = GRanges(seqnames = peakRes$V1, IRanges(start = peakRes$V2, end = peakRes$V3), strand = "*")
@@ -126,18 +126,14 @@ for (absname in as.character(snakemake@input[["peaks"]])) {
 
     fragment_counts = getCounts(bamFile, peak.gr, paired = is_paired, by_rg = FALSE, format = "bam")
     inPeakN = counts(fragment_counts)[,1] |> sum()
-    peakF = tibble(inPeakN=inPeakN, sampleID=sample) |> bind_rows(peakF)
+    totalN = sum(idxstatsBam(bamFile)$mapped)
+    peakF = tibble(inPeakN=inPeakN, totalN=totalN, sampleID=sample) |> bind_rows(peakF)
 }
 
-frag_denom_col <- if (dedup) "UniqueFragNum" else "MappedFragNum"
-
 df <- left_join(peakF, samplesheet) |>
-      select(sampleID, condition, inPeakN) |>
-      left_join(stats, by=c("sampleID"="Sample")) |>
-      select(sampleID, condition, inPeakN, all_of(frag_denom_col)) |>
-      rename(fragDenom = all_of(frag_denom_col)) |>
-      mutate(FRiP = round(inPeakN * 100.0 / fragDenom, 2)) |>
-      select(-fragDenom)
+      select(sampleID, condition, inPeakN, totalN) |>
+      mutate(FRiP = round(inPeakN * 100.0 / totalN, 2)) |>
+      select(-totalN)
 df |> write_tsv(as.character(snakemake@output[["peakF"]]))
 
 # GC Content Analysis

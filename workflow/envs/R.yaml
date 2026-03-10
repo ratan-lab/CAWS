@@ -10,6 +10,7 @@ dependencies:
   - r-viridis=0.6.2
   - bioconductor-chromvar=1.20.0
   - bioconductor-genomicranges
+  - bioconductor-rsamtools
   - r-flexdashboard
   - r-plotly
   - r-dt
