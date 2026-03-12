@@ -8,7 +8,6 @@ library(chromVAR)
 
 
 samplesheet <- read_tsv(as.character(snakemake@params[["samplesheet"]]))
-stats <- read_tsv(as.character(snakemake@input[["stats"]]))
 folder <- as.character(snakemake@params[["subdir"]])
 method <- as.character(snakemake@params[["method"]])
 
@@ -28,7 +27,7 @@ peakF = tibble()
 for (absname in as.character(snakemake@input[["peaks"]])) {
     if (file.size(absname) == 0L) next
     filename = basename(absname)
-    sample = str_split(filename, suffix, fixed = TRUE)[[1]][1]
+    sample = str_split(filename, fixed(suffix))[[1]][1]
     peakInfo = read.table(absname, header = FALSE, fill = TRUE) |> mutate(width = V3 - V2) |> filter(width > 0)
     peakN = tibble(peakN=nrow(peakInfo), sampleID=sample) |> bind_rows(peakN)
     peakW = tibble(width=peakInfo$width, sampleID=sample) |> bind_rows(peakW)
@@ -72,8 +71,8 @@ for (absname1 in as.character(snakemake@input[["peaks"]])) {
         filename1 = basename(absname1)
         filename2 = basename(absname2)
 
-        sample1 = str_split(filename1, suffix, fixed = TRUE)[[1]][1]
-        sample2 = str_split(filename2, suffix, fixed = TRUE)[[1]][1]
+        sample1 = str_split(filename1, fixed(suffix))[[1]][1]
+        sample2 = str_split(filename2, fixed(suffix))[[1]][1]
 
         peakInfo1 = read.table(absname1, header = FALSE, fill = TRUE)  
         peakInfo2 = read.table(absname2, header = FALSE, fill = TRUE)  
@@ -105,7 +104,7 @@ df |> write_tsv(as.character(snakemake@output[["peakR"]]))
 for (absname in as.character(snakemake@input[["peaks"]])) {
     if (file.size(absname) == 0L) next
     filename = basename(absname)
-    sample = str_split(filename, suffix, fixed = TRUE)[[1]][1]
+    sample = str_split(filename, fixed(suffix))[[1]][1]
 
     peakRes = read.table(absname, header = FALSE, fill = TRUE)
     peak.gr = GRanges(seqnames = peakRes$V1, IRanges(start = peakRes$V2, end = peakRes$V3), strand = "*")

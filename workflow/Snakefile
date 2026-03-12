@@ -746,7 +746,6 @@ rule call_macs_peaks_se:
 rule assess_peaks:
     input:
         peaks=expand("peaks/seacr/{sample}.peaks.stringent.bed", sample=EXPERIMENT),
-        stats="stats/stats.txt",
         gc_files=expand("stats/seacr/{sample}_gc_content.txt", sample=EXPERIMENT),
     output:
         peakN="stats/seacr/peaks_num.txt",
@@ -768,7 +767,6 @@ rule assess_peaks:
 use rule assess_peaks as assess_macs_peaks with:
     input:
         peaks=expand("peaks/macs3/{sample}_peaks.narrowPeak", sample=EXPERIMENT),
-        stats="stats/stats.txt",
         gc_files=expand("stats/macs3/{sample}_gc_content.txt", sample=EXPERIMENT),
     output:
         peakN="stats/macs3/peaks_num.txt",
