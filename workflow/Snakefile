@@ -966,6 +966,7 @@ ruleorder: check_quality_pe > check_quality_se
 ruleorder: trim_adapters_pe > trim_adapters_se
 ruleorder: align_reads_pe > align_reads_se
 ruleorder: find_ecoli_reads_pe > find_ecoli_reads_se
+
 rule bam_to_tdf_pe:
     input:
         bam=(
@@ -989,7 +990,7 @@ rule bam_to_tdf_pe:
         "envs/igvtools.yaml"
     shell:
         """
-        TMP_CHROM=$(mktemp)
+        TMP_CHROM=$(mktemp --suffix=.chrom.sizes)
         cut -f 1,2 {input.fai} > $TMP_CHROM
         igvtools count --pairs -z 7 -w 25 {input.bam} {output.tdf} $TMP_CHROM 2> {log}
         rm -f $TMP_CHROM
@@ -1018,7 +1019,7 @@ rule bam_to_tdf_se:
         "envs/igvtools.yaml"
     shell:
         """
-        TMP_CHROM=$(mktemp)
+        TMP_CHROM=$(mktemp --suffix=.chrom.sizes)
         cut -f 1,2 {input.fai} > $TMP_CHROM
         igvtools count -z 7 -w 25 -e 200 {input.bam} {output.tdf} $TMP_CHROM 2> {log}
         rm -f $TMP_CHROM
