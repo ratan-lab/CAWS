@@ -4,7 +4,6 @@ library(tidyverse)
 library(GenomicRanges)
 library(Rsamtools)
 library(viridis)
-library(chromVAR)
 
 
 samplesheet <- read_tsv(as.character(snakemake@params[["samplesheet"]]))
@@ -101,31 +100,33 @@ df <- left_join(peakO, samplesheet, by=c("sample1"="sampleID")) |>
 df |> write_tsv(as.character(snakemake@output[["peakR"]]))
 
 # FRiPs
+missing_indicators <- c("", "na", "n/a", "null", "none", "-", "nan", "nil", "empty", "0", "false", "missing", "absent", "single", "se")
+
 for (absname in as.character(snakemake@input[["peaks"]])) {
     if (file.size(absname) == 0L) next
     filename = basename(absname)
     sample = str_split(filename, fixed(suffix))[[1]][1]
 
     peakRes = read.table(absname, header = FALSE, fill = TRUE)
-    peak.gr = GRanges(seqnames = peakRes$V1, IRanges(start = peakRes$V2, end = peakRes$V3), strand = "*")
+    peak.gr = reduce(GRanges(seqnames = peakRes$V1, IRanges(start = peakRes$V2, end = peakRes$V3), strand = "*"))
     bamFile = paste0(folder, "/", sample, ".sorted.qflt.bam")
+    baiFile = paste0(bamFile, ".bai")
+    if (!file.exists(baiFile)) stop(paste("BAI index not found:", baiFile))
 
-    # Determine if sample is paired-end from samplesheet
-    # This logic must match the Python is_missing_read2() function in Snakefile
     sample_info <- samplesheet |> filter(sampleID == sample)
-    is_paired <- if (nrow(sample_info) > 0) {
-        read2_value <- sample_info$read2[1]
-        # Check if read2 is missing/empty (indicates single-end)
-        # List of values that indicate missing read2 (matches Python version)
-        missing_indicators <- c("", "na", "n/a", "null", "none", "-", "nan", "nil", "empty", "0", "false", "missing", "absent", "single", "se")
-        !(is.na(read2_value) || trimws(tolower(as.character(read2_value))) %in% missing_indicators)
-    } else {
-        stop(paste("Sample", sample, "not found in samplesheet"))
-    }
+    if (nrow(sample_info) == 0) stop(paste("Sample", sample, "not found in samplesheet"))
+    read2_value <- sample_info$read2[1]
+    is_paired <- !(is.na(read2_value) || trimws(tolower(as.character(read2_value))) %in% missing_indicators)
 
-    fragment_counts = getCounts(bamFile, peak.gr, paired = is_paired, by_rg = FALSE, format = "bam")
-    inPeakN = counts(fragment_counts)[,1] |> sum()
-    totalN = sum(idxstatsBam(bamFile)$mapped)
+    flag <- if (is_paired) {
+        scanBamFlag(isUnmappedQuery = FALSE, isFirstMateRead = TRUE)
+    } else {
+        scanBamFlag(isUnmappedQuery = FALSE)
+    }
+    param <- ScanBamParam(which = peak.gr, flag = flag)
+    inPeakN <- sum(countBam(bamFile, param = param)$records)
+    totalN <- sum(idxstatsBam(bamFile)$mapped)
+    if (is_paired) totalN <- totalN / 2L
     peakF = tibble(inPeakN=inPeakN, totalN=totalN, sampleID=sample) |> bind_rows(peakF)
 }
 

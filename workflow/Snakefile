@@ -747,6 +747,10 @@ rule assess_peaks:
     input:
         peaks=expand("peaks/seacr/{sample}.peaks.stringent.bed", sample=EXPERIMENT),
         gc_files=expand("stats/seacr/{sample}_gc_content.txt", sample=EXPERIMENT),
+        bai=expand(
+            "dedupalignments/{sample}.sorted.qflt.bam.bai" if config["dedup"] else "alignments/{sample}.sorted.qflt.bam.bai",
+            sample=EXPERIMENT
+        ),
     output:
         peakN="stats/seacr/peaks_num.txt",
         peakR="stats/seacr/peaks_reproducibility.txt",
@@ -768,6 +772,10 @@ use rule assess_peaks as assess_macs_peaks with:
     input:
         peaks=expand("peaks/macs3/{sample}_peaks.narrowPeak", sample=EXPERIMENT),
         gc_files=expand("stats/macs3/{sample}_gc_content.txt", sample=EXPERIMENT),
+        bai=expand(
+            "dedupalignments/{sample}.sorted.qflt.bam.bai" if config["dedup"] else "alignments/{sample}.sorted.qflt.bam.bai",
+            sample=EXPERIMENT
+        ),
     output:
         peakN="stats/macs3/peaks_num.txt",
         peakR="stats/macs3/peaks_reproducibility.txt",
