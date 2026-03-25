@@ -3,4 +3,4 @@ channels:
   - bioconda
   - defaults
 dependencies:
-  - igvtools
+  - igvtools=2.14.1
