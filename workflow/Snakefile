@@ -970,19 +970,17 @@ ruleorder: find_ecoli_reads_pe > find_ecoli_reads_se
 rule bedgraph_to_tdf:
     input:
         bedgraph="bedalignments/{sample}.bedgraph",
-        fai=config["reference_fai"],
     output:
         tdf="tdf/{sample}.tdf",
     log:
         "logs/bedgraph_to_tdf/{sample}.log",
+    params:
+        igv_genome=config["igv_genome"]
     conda:
         "envs/igvtools.yaml"
     shell:
         """
-        TMP_CHROM=$(mktemp --suffix=.chrom.sizes)
-        cut -f 1,2 {input.fai} > $TMP_CHROM
-        igvtools toTDF {input.bedgraph} {output.tdf} $TMP_CHROM 2> {log}
-        rm -f $TMP_CHROM
+        igvtools toTDF {input.bedgraph} {output.tdf} {params.igv_genome} 2> {log}
         """
 
 ruleorder: bam_to_bed_pe > bam_to_bed_se

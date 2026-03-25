@@ -324,6 +324,7 @@ Create `config.json`:
     "macs3_qvalue_with_control": 0.05,
     "macs3_qvalue_no_control": 0.01,
     "heatmap_window": 3000,
+    "igv_genome": "hg38",
     "outdir": "results"
 }
 ```
@@ -450,6 +451,7 @@ The interactive report includes:
 | `genome_size` | Genome size for MACS3 peak calling: `"hs"` (human), `"mm"` (mouse), `"ce"` (C. elegans), `"dm"` (Drosophila), or numeric value (e.g., `2.7e9`) |
 | `seacr_qvalue`, `macs3_qvalue_with_control`, `macs3_qvalue_no_control` | Statistical thresholds for SEACR/MACS3 |
 | `heatmap_window` | Window size (bp) around peaks for heatmaps |
+| `igv_genome` | Genome identifier for IGV TDF generation (e.g., `"hg38"`, `"mm10"`) — must match an ID bundled with igvtools |
 | `gtf_file` | Path to GTF file for TSS enrichment (optional) |
 | `outdir` | Output directory for analysis results |
 
@@ -478,6 +480,7 @@ The interactive report includes:
     "macs3_qvalue_no_control": 0.001,
     "heatmap_window": 3000,
     "gtf_file": "",
+    "igv_genome": "hg38",
     "outdir": "/data/CAWS/20230324"
 }
 ```
@@ -622,6 +625,7 @@ output_directory/
 ├── stats/
 │   ├── seacr/           # SEACR metrics
 │   └── macs3/           # MACS3 metrics
+├── tdf/                 # IGV TDF coverage tracks (one per sample)
 ├── reports/             # Interactive HTML reports
 ├── annotations/         # GTF-based TSS data
 └── logs/                # Log files

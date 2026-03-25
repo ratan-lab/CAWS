@@ -20,5 +20,6 @@
     "macs3_qvalue_no_control": 0.001,
     "heatmap_window": 3000,
     "gtf_file": "",
+    "igv_genome": "hg38",
     "outdir": ""
 }
