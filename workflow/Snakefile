@@ -158,6 +158,7 @@ rule all:
         expand("alignments/{sample}.fraglengths.txt", sample=PE_SAMPLES),
         "stats/tss_enrichment.txt" if config["gtf_file"] else [],
         "reports/cutntag_analysis_report.html",
+        expand("tdf/{sample}.tdf", sample=SAMPLES),
 
 
 rule check_quality_pe:
@@ -965,8 +966,67 @@ ruleorder: check_quality_pe > check_quality_se
 ruleorder: trim_adapters_pe > trim_adapters_se
 ruleorder: align_reads_pe > align_reads_se
 ruleorder: find_ecoli_reads_pe > find_ecoli_reads_se
+rule bam_to_tdf_pe:
+    input:
+        bam=(
+            "dedupalignments/{sample}.sorted.qflt.bam"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.qflt.bam"
+        ),
+        bai=(
+            "dedupalignments/{sample}.sorted.qflt.bam.bai"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.qflt.bam.bai"
+        ),
+        fai=config["reference_fai"],
+    output:
+        tdf="tdf/{sample}.tdf",
+    wildcard_constraints:
+        sample="|".join(PE_SAMPLES) if PE_SAMPLES else "NO_PE_SAMPLES"
+    log:
+        "logs/bam_to_tdf_pe/{sample}.log",
+    conda:
+        "envs/igvtools.yaml"
+    shell:
+        """
+        TMP_CHROM=$(mktemp)
+        cut -f 1,2 {input.fai} > $TMP_CHROM
+        igvtools count --pairs -z 7 -w 25 {input.bam} {output.tdf} $TMP_CHROM 2> {log}
+        rm -f $TMP_CHROM
+        """
+
+rule bam_to_tdf_se:
+    input:
+        bam=(
+            "dedupalignments/{sample}.sorted.qflt.bam"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.qflt.bam"
+        ),
+        bai=(
+            "dedupalignments/{sample}.sorted.qflt.bam.bai"
+            if config["dedup"]
+            else "alignments/{sample}.sorted.qflt.bam.bai"
+        ),
+        fai=config["reference_fai"],
+    output:
+        tdf="tdf/{sample}.tdf",
+    wildcard_constraints:
+        sample="|".join(SE_SAMPLES) if SE_SAMPLES else "NO_SE_SAMPLES"
+    log:
+        "logs/bam_to_tdf_se/{sample}.log",
+    conda:
+        "envs/igvtools.yaml"
+    shell:
+        """
+        TMP_CHROM=$(mktemp)
+        cut -f 1,2 {input.fai} > $TMP_CHROM
+        igvtools count -z 7 -w 25 -e 200 {input.bam} {output.tdf} $TMP_CHROM 2> {log}
+        rm -f $TMP_CHROM
+        """
+
 ruleorder: bam_to_bed_pe > bam_to_bed_se
 ruleorder: call_macs_peaks_pe > call_macs_peaks_se
+ruleorder: bam_to_tdf_pe > bam_to_tdf_se
 
 onsuccess:
     shutil.rmtree(os.path.join(config["outdir"], "alignments"), ignore_errors=True)
