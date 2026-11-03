@@ -273,8 +273,10 @@ gunzip hg38-blacklist.v2.bed.gz
 wget https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.chrom.sizes
 
 # Download GTF annotation for TSS enrichment (optional)
-wget https://ftp.ensembl.org/pub/release-110/gtf/homo_sapiens/Homo_sapiens.GRCh38.110.gtf.gz
-gunzip Homo_sapiens.GRCh38.110.gtf.gz
+# GENCODE uses UCSC-style chromosome names (chr1), matching the hg38 reference above.
+# Ensembl GTFs also work, but use "1" instead of "chr1" and must be paired with an Ensembl-style reference.
+wget https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_47/gencode.v47.annotation.gtf.gz
+gunzip gencode.v47.annotation.gtf.gz
 
 # E. coli reference (for spike-in normalization)
 wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/005/845/GCF_000005845.2_ASM584v2/GCF_000005845.2_ASM584v2_genomic.fna.gz
@@ -310,7 +312,7 @@ Create `config.json`:
     "blacklist": "/path/to/hg38-blacklist.v2.bed",
     "ecoli_reference": "/path/to/GCF_000005845.2_ASM584v2_genomic.fna",
     "ecoli_bt2_idx": "/path/to/ecoli_index",
-    "gtf_file": "/path/to/Homo_sapiens.GRCh38.110.gtf",
+    "gtf_file": "/path/to/gencode.v47.annotation.gtf",
     "trim_adapters": true,
     "igg_control": true,
     "mt_chrom": "chrM",
@@ -667,7 +669,7 @@ Enable by specifying a GTF file in your configuration:
 ```
 
 **Features:**  
-- Extracts TSS sites from GTF (`.gtf` or `.gtf.gz`)  
+- Extracts TSS sites of protein-coding genes from GTF (`.gtf` or `.gtf.gz`; GENCODE `gene_type` or Ensembl `gene_biotype`). Chromosome names must match the reference.  
 - Calculates enrichment ±2 kb around TSS  
 - Generates TSS enrichment plots and scores  
 - Integrates results into the dashboard  

@@ -891,6 +891,7 @@ if config["gtf_file"]:
     rule extract_tss:
         input:
             gtf=config["gtf_file"],
+            fai=config["reference_fai"],
         output:
             tss="annotations/tss.bed",
         log:
@@ -903,9 +904,18 @@ if config["gtf_file"]:
 
             # Handle both gzipped and regular GTF files
             if [[ {input.gtf} == *.gz ]]; then
-                zcat {input.gtf} | awk '$3=="gene" && $7=="+" && $0~/gene_type "protein_coding"/ {{print $1"\\t"($4-1)"\\t"$4"\\t"$10"\\t"$6"\\t"$7}} $3=="gene" && $7=="-" && $0~/gene_type "protein_coding"/ {{print $1"\\t"($5-1)"\\t"$5"\\t"$10"\\t"$6"\\t"$7}}' | sed 's/[";]//g' > {output.tss}
+                zcat {input.gtf} | awk '$3=="gene" && $7=="+" && $0~/gene_(bio)?type "protein_coding"/ {{print $1"\\t"($4-1)"\\t"$4"\\t"$10"\\t"$6"\\t"$7}} $3=="gene" && $7=="-" && $0~/gene_(bio)?type "protein_coding"/ {{print $1"\\t"($5-1)"\\t"$5"\\t"$10"\\t"$6"\\t"$7}}' | sed 's/[";]//g' > {output.tss}
             else
-                cat {input.gtf} | awk '$3=="gene" && $7=="+" && $0~/gene_type "protein_coding"/ {{print $1"\\t"($4-1)"\\t"$4"\\t"$10"\\t"$6"\\t"$7}} $3=="gene" && $7=="-" && $0~/gene_type "protein_coding"/ {{print $1"\\t"($5-1)"\\t"$5"\\t"$10"\\t"$6"\\t"$7}}' | sed 's/[";]//g' > {output.tss}
+                cat {input.gtf} | awk '$3=="gene" && $7=="+" && $0~/gene_(bio)?type "protein_coding"/ {{print $1"\\t"($4-1)"\\t"$4"\\t"$10"\\t"$6"\\t"$7}} $3=="gene" && $7=="-" && $0~/gene_(bio)?type "protein_coding"/ {{print $1"\\t"($5-1)"\\t"$5"\\t"$10"\\t"$6"\\t"$7}}' | sed 's/[";]//g' > {output.tss}
+            fi
+
+            if [ ! -s {output.tss} ]; then
+                echo "ERROR: no protein_coding genes found in {input.gtf} (expected gene_type or gene_biotype attribute)" >&2
+                exit 1
+            fi
+            if ! cut -f1 {output.tss} | sort -u | grep -xFf <(cut -f1 {input.fai}) > /dev/null; then
+                echo "ERROR: chromosome names in {input.gtf} do not match {input.fai} (e.g. '1' vs 'chr1'); use a GTF with matching names" >&2
+                exit 1
             fi
             """
 
