@@ -39,13 +39,12 @@ CAWS is designed for:
 
 ### Required Software
 - **Snakemake** ≥9.0.0 (tested with 9.8.1)
-- **Conda** ≥24.7.1 or **Mamba** ≥1.5.0 (recommended)
+- **Conda** ≥24.7.1
 - **Python** ≥3.7
 - **R** ≥4.0
 
 **Important Notes**:
 - Snakemake 9.0+ requires Conda ≥24.7.1 for environment management
-- **Mamba is recommended** as the conda frontend for faster environment creation (already configured in profile)
 - If you encounter conda version errors, see Troubleshooting section below  
 
 ### System Requirements  
@@ -616,7 +615,7 @@ tail -f logs/rulename/*   # Watch specific rule logs
 output_directory/
 ├── qc/                  # FastQC reports
 ├── trimmed/             # Adapter-trimmed reads
-├── alignments/          # BAM alignments (deleted on successful completion)
+├── alignments/          # Alignment stats, fragment lengths, bigwigs (raw BAMs removed when dedup=true)
 ├── dedupalignments/     # Deduplicated BAMs (quality-filtered versions preserved)
 ├── bedalignments/       # BED files for peak calling
 ├── peaks/
@@ -625,13 +624,15 @@ output_directory/
 ├── stats/
 │   ├── seacr/           # SEACR metrics
 │   └── macs3/           # MACS3 metrics
-├── tdf/                 # IGV TDF coverage tracks (one per sample)
+├── tdf/                 # IGV TDF coverage tracks, CPM-normalized (one per sample)
 ├── reports/             # Interactive HTML reports
 ├── annotations/         # GTF-based TSS data
 └── logs/                # Log files
 ```
 
-**Note on alignment cleanup**: Upon successful pipeline completion, the `alignments/` directory is automatically deleted to save disk space. Quality-filtered BAM files used for peak calling are preserved in `dedupalignments/` (if deduplication is enabled). If you need to retain the original alignment files, interrupt the pipeline before completion or modify the cleanup behavior in the Snakefile (lines 965-966).
+**Note on alignment cleanup**: When `dedup` is `true`, the raw `alignments/{sample}.sorted.bam` (and index) are marked as temporary and removed once the deduplicated BAMs in `dedupalignments/` have been created and all other consumers have finished. Run with `--notemp` to keep them. When `dedup` is `false`, the raw BAMs are retained because they are the primary alignments.
+
+**Note on TDF tracks**: TDF files are generated from coverage scaled to counts per million filtered fragments (CPM, excluding fragments on `mt_chrom` from the total), so tracks are comparable across samples in IGV. The raw-count bedgraphs in `bedalignments/` are kept for SEACR.
 
 </details>
 
@@ -778,10 +779,10 @@ If this affects many samples, consider adjusting `macs3_qvalue_no_control` in co
 
 **Issue**: Environment creation takes very long or appears stuck
 
-**Solution**: Use mamba instead of conda
+**Solution**: Snakemake 9 uses conda's built-in libmamba solver. Make sure it is active:
 ```bash
-# The profile already uses mamba, but ensure it's installed:
-conda install -c conda-forge mamba
+conda config --show solver   # should report: libmamba
+conda config --set solver libmamba
 ```
 
 ### Permission Denied Errors

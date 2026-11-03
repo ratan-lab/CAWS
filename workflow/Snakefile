@@ -1,6 +1,5 @@
 from snakemake.utils import min_version
 import os
-import shutil
 import numpy as np
 import pandas as pd
 
@@ -288,7 +287,8 @@ rule convert_to_binary:
     input:
         "alignments/{sample}.sam",
     output:
-        bam="alignments/{sample}.sorted.bam",
+        # raw BAM is superseded by dedupalignments/ when dedup is enabled
+        bam=temp("alignments/{sample}.sorted.bam") if config["dedup"] else "alignments/{sample}.sorted.bam",
     log:
         "logs/convert_to_binary/{sample}.log",
     conda:
@@ -304,7 +304,7 @@ rule index_bam:
     input:
         bam="alignments/{sample}.sorted.bam",
     output:
-        bai="alignments/{sample}.sorted.bam.bai",
+        bai=temp("alignments/{sample}.sorted.bam.bai") if config["dedup"] else "alignments/{sample}.sorted.bam.bai",
     log:
         "logs/index_bam/{sample}.log",
     conda:
@@ -474,6 +474,7 @@ rule bam_to_bed_pe:
         ),
         bed=temp("bedalignments/{sample}.bed"),
         bedgraph="bedalignments/{sample}.bedgraph",
+        cpm_bedgraph=temp("bedalignments/{sample}.cpm.bedgraph"),
         binbed="bedalignments/{sample}.bin.bed",
     wildcard_constraints:
         sample="|".join(PE_SAMPLES) if PE_SAMPLES else "NO_PE_SAMPLES"
@@ -482,6 +483,7 @@ rule bam_to_bed_pe:
     params:
         chroms=config["chromosome_file"],
         minq=config["minquality"],
+        mt=config["mt_chrom"],
     conda:
         "envs/bedtools.yaml"
     threads: 2
@@ -508,6 +510,11 @@ rule bam_to_bed_pe:
         # Common processing
         bedtools genomecov -bg -i {output.bed} \
             -g <(cut -f 1,2 {input.fai}) > {output.bedgraph}
+
+        # CPM-scaled coverage (per million filtered, non-mitochondrial fragments) for TDF tracks
+        scale=$(awk -v mt="{params.mt}" '$1 != mt {{n++}} END {{print (n > 0) ? 1000000/n : 0}}' {output.bed})
+        bedtools genomecov -bg -scale $scale -i {output.bed} \
+            -g <(cut -f 1,2 {input.fai}) > {output.cpm_bedgraph}
 
         awk -v w=500 '{{print $1, int(($2 + $3)/(2*w))*w + w/2}}' {output.bed} \
         | sort -k1,1V -k2,2n \
@@ -544,6 +551,7 @@ rule bam_to_bed_se:
         ),
         bed=temp("bedalignments/{sample}.bed"),
         bedgraph="bedalignments/{sample}.bedgraph",
+        cpm_bedgraph=temp("bedalignments/{sample}.cpm.bedgraph"),
         binbed="bedalignments/{sample}.bin.bed",
     wildcard_constraints:
         sample="|".join(SE_SAMPLES) if SE_SAMPLES else "NO_SE_SAMPLES"
@@ -552,6 +560,7 @@ rule bam_to_bed_se:
     params:
         chroms=config["chromosome_file"],
         minq=config["minquality"],
+        mt=config["mt_chrom"],
     conda:
         "envs/bedtools.yaml"
     threads: 2
@@ -576,6 +585,11 @@ rule bam_to_bed_se:
         # Common processing
         bedtools genomecov -bg -i {output.bed} \
             -g <(cut -f 1,2 {input.fai}) > {output.bedgraph}
+
+        # CPM-scaled coverage (per million filtered, non-mitochondrial fragments) for TDF tracks
+        scale=$(awk -v mt="{params.mt}" '$1 != mt {{n++}} END {{print (n > 0) ? 1000000/n : 0}}' {output.bed})
+        bedtools genomecov -bg -scale $scale -i {output.bed} \
+            -g <(cut -f 1,2 {input.fai}) > {output.cpm_bedgraph}
 
         awk -v w=500 '{{print $1, int(($2 + $3)/(2*w))*w + w/2}}' {output.bed} \
         | sort -k1,1V -k2,2n \
@@ -969,7 +983,7 @@ ruleorder: find_ecoli_reads_pe > find_ecoli_reads_se
 
 rule bedgraph_to_tdf:
     input:
-        bedgraph="bedalignments/{sample}.bedgraph",
+        bedgraph="bedalignments/{sample}.cpm.bedgraph",
     output:
         tdf="tdf/{sample}.tdf",
     log:
@@ -985,7 +999,4 @@ rule bedgraph_to_tdf:
 
 ruleorder: bam_to_bed_pe > bam_to_bed_se
 ruleorder: call_macs_peaks_pe > call_macs_peaks_se
-
-onsuccess:
-    shutil.rmtree(os.path.join(config["outdir"], "alignments"), ignore_errors=True)
 

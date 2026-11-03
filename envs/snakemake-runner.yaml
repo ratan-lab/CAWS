@@ -6,4 +6,3 @@ dependencies:
   - python >=3.9
   - snakemake >=9
   - snakemake-executor-plugin-slurm
-  - mamba
