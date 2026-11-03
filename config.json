@@ -5,8 +5,11 @@
     "reference_fai": "",
     "chromosome_file": "",
     "blacklist": "",
-    "ecoli_reference": "",
-    "ecoli_bt2_idx": "",
+    "contaminant_genomes": {
+        "Ecoli": "",
+        "Bovine": ""
+    },
+    "contaminant_subset": 1000000,
     "trim_adapters": true,
     "igg_control": false,
     "mt_chrom": "",

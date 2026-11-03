@@ -67,6 +67,16 @@ if config["igg_control"]:
         assert len(controls) == 1, f"Group '{group}' must have exactly one Control sample when igg_control=true, found {len(controls)}"
         assert len(experiments) >= 1, f"Group '{group}' must have at least one experimental sample when igg_control=true, found {len(experiments)}"
 
+# validate contaminant genomes screened with FastQ Screen
+assert "contaminant_genomes" in config and "contaminant_subset" in config, \
+    "config needs 'contaminant_genomes' and 'contaminant_subset' (these replace 'ecoli_reference'/'ecoli_bt2_idx'; see README)"
+CONTAMINANTS = config["contaminant_genomes"]
+assert CONTAMINANTS, "contaminant_genomes must list at least one genome (e.g. Ecoli)"
+for name, idx in CONTAMINANTS.items():
+    assert name != "Host", "'Host' is reserved for the reference genome in contaminant_genomes"
+    assert name.isidentifier(), f"contaminant_genomes name '{name}' must be alphanumeric/underscore only"
+    assert idx, f"contaminant_genomes['{name}'] needs a Bowtie2 index prefix"
+
 logdir = config["outdir"] + "/logs"
 if not os.path.exists(logdir):
     os.makedirs(logdir)
@@ -356,51 +366,47 @@ rule find_mtdna_reads:
         mtdna=config["mt_chrom"],
     shell:
         """
-        samtools view -f0x40 {input.bam} {params.mtdna} | wc -l > {output}
+        # one count per fragment: skip read 2 (0x80), unmapped, secondary, supplementary; works for SE and PE
+        samtools view -c -F 0x984 {input.bam} {params.mtdna} > {output}
         """
 
 
-rule find_ecoli_reads_pe:
+def screen_input(wildcards):
+    """Read 1 (trimmed if enabled) used for contaminant screening"""
+    if not config["trim_adapters"]:
+        return r1_from_sample(wildcards)
+    if samplesheet.loc[wildcards.sample, "is_paired"]:
+        return f"trimmed/{wildcards.sample}_val_1.fq.gz"
+    return f"trimmed/{wildcards.sample}_trimmed.fq.gz"
+
+
+# Host genome is screened alongside contaminants so reads shared between
+# genomes are classified as multi-genome rather than counted as contamination
+rule screen_contaminants:
     input:
-        ref=config["ecoli_reference"],
-        r1="trimmed/{sample}_val_1.fq.gz" if config["trim_adapters"] else r1_from_sample,
-        r2="trimmed/{sample}_val_2.fq.gz" if config["trim_adapters"] else r2_from_sample,
+        reads=screen_input,
     output:
-        sam=temp("alignments/{sample}.ecoli.sam"),
-        txt="alignments/{sample}.ecoli.txt",
-    wildcard_constraints:
-        sample="|".join(PE_SAMPLES) if PE_SAMPLES else "NO_PE_SAMPLES"
+        txt="qc/fastq_screen/{sample}_screen.txt",
     log:
-        "logs/find_ecoli_reads_pe/{sample}.log",
+        "logs/screen_contaminants/{sample}.log",
     conda:
-        "envs/bowtie.yaml"
+        "envs/fastq_screen.yaml"
     threads: 4
     params:
-        ref=config["ecoli_bt2_idx"],
+        databases=" ".join(
+            f"'DATABASE {name} {idx}'"
+            for name, idx in [("Host", config["bt2_idx"])] + list(CONTAMINANTS.items())
+        ),
+        subset=config["contaminant_subset"],
     shell:
         """
-        bowtie2 --end-to-end --very-sensitive --no-mixed --no-discordant --phred33 -I {config[fragment_min]} -X {config[fragment_max]} -p {threads} -x {params.ref} -1 {input.r1} -2 {input.r2} -S {output.sam} &> {output.txt}
-        """
-
-rule find_ecoli_reads_se:
-    input:
-        ref=config["ecoli_reference"],
-        r1="trimmed/{sample}_trimmed.fq.gz" if config["trim_adapters"] else r1_from_sample,
-    output:
-        sam=temp("alignments/{sample}.ecoli.sam"),
-        txt="alignments/{sample}.ecoli.txt",
-    wildcard_constraints:
-        sample="|".join(SE_SAMPLES) if SE_SAMPLES else "NO_SE_SAMPLES"
-    log:
-        "logs/find_ecoli_reads_se/{sample}.log",
-    conda:
-        "envs/bowtie.yaml"
-    threads: 4
-    params:
-        ref=config["ecoli_bt2_idx"],
-    shell:
-        """
-        bowtie2 --end-to-end --very-sensitive --phred33 -p {threads} -x {params.ref} -U {input.r1} -S {output.sam} &> {output.txt}
+        tmp=$(mktemp -d qc/fastq_screen/{wildcards.sample}.XXXXXX)
+        trap 'rm -rf "$tmp"' EXIT
+        printf '%s\\n' {params.databases} > $tmp/fastq_screen.conf
+        fastq_screen --conf $tmp/fastq_screen.conf --aligner bowtie2 \\
+            --subset {params.subset} --threads {threads} --outdir $tmp --force \\
+            {input.reads} > {log} 2>&1
+        mv $tmp/*_screen.txt {output.txt}
         """
 
 
@@ -409,13 +415,15 @@ rule report_on_alignments:
         aln=expand("alignments/{sample}.alignments.txt", sample=SAMPLES),
         mtn=expand("alignments/{sample}.mtdna.txt", sample=SAMPLES),
         dup=expand("dedupalignments/{sample}.rmdup.txt", sample=SAMPLES),
-        eco=expand("alignments/{sample}.ecoli.txt", sample=SAMPLES),
+        screen=expand("qc/fastq_screen/{sample}_screen.txt", sample=SAMPLES),
     output:
         report("stats/stats.txt", caption="report/alignment.rst"),
     log:
         "logs/report_on_alignments/job.log",
     conda:
         "envs/R.yaml"
+    params:
+        contaminants=list(CONTAMINANTS),
     script:
         "scripts/run_alignment_report.R"
 
@@ -989,7 +997,6 @@ rule generate_html_report:
 ruleorder: check_quality_pe > check_quality_se
 ruleorder: trim_adapters_pe > trim_adapters_se
 ruleorder: align_reads_pe > align_reads_se
-ruleorder: find_ecoli_reads_pe > find_ecoli_reads_se
 
 rule bedgraph_to_tdf:
     input:

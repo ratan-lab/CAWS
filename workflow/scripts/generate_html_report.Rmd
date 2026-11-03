@@ -175,16 +175,13 @@ create_alignment_barplot <- function(stats_data, sample_data) {
     return(ggplot() + labs(title = "No data available"))
   }
 
-  # Parse percentage values and calculate metrics
+  # Parse percentage values; contaminant columns come from FastQ Screen ({Genome}OnlyRate)
+  rate_cols <- c("AlignmentRate", "DuplicationRate", "MtAlignmentRate",
+                 str_subset(names(stats_data), "OnlyRate$"))
   alignment_data <- stats_data |>
     left_join(sample_data, by = c("Sample" = "sampleID")) |>
-    mutate(
-      alignment_rate = parse_percentage(AlignmentRate),
-      duplication_rate = parse_percentage(DuplicationRate),
-      mt_alignment_rate = parse_percentage(MtAlignmentRate),
-      ecoli_alignment_rate = parse_percentage(EcoliAlignmentRate)
-    ) |>
-    select(Sample, alignment_rate, duplication_rate, mt_alignment_rate, ecoli_alignment_rate) |>
+    select(Sample, all_of(rate_cols)) |>
+    mutate(across(-Sample, parse_percentage)) |>
     pivot_longer(
       cols = -Sample,
       names_to = "metric",
@@ -192,10 +189,10 @@ create_alignment_barplot <- function(stats_data, sample_data) {
     ) |>
     mutate(
       metric_label = case_when(
-        metric == "alignment_rate" ~ "Total Aligned",
-        metric == "duplication_rate" ~ "Duplicates",
-        metric == "mt_alignment_rate" ~ "mtDNA",
-        metric == "ecoli_alignment_rate" ~ "E.coli"
+        metric == "AlignmentRate" ~ "Total Aligned",
+        metric == "DuplicationRate" ~ "Duplicates",
+        metric == "MtAlignmentRate" ~ "mtDNA",
+        TRUE ~ str_remove(metric, "OnlyRate$")
       )
     )
 

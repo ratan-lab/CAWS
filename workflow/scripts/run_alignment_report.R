@@ -41,18 +41,15 @@ for (absname in snakemake@input[["dup"]]) {
     df2 = bind_rows(df2, res)
 }
 
-df3 <- tibble()
-for (absname in snakemake@input[["eco"]]) {
-    filename = strsplit(absname, "/")[[1]][2]
-    samplename = strsplit(filename, ".ecoli.txt")[[1]][1]
-
-    data = read.table(absname, fill=NA, header=FALSE)
-    res = tibble(Sample=samplename,
-                 EcoliMappedFrag=as.numeric(data$V1[4]) + as.numeric(data$V1[5]),
-                 EcoliAlignmentRate=data$V1[6])
-    df3 = bind_rows(df3, res)
-}
-
+# FastQ Screen: % of reads mapping only to each contaminant (one or multiple hits)
+contaminants <- unlist(snakemake@params[["contaminants"]])
+df3 <- snakemake@input[["screen"]] |>
+    map_dfr(\(f) read_tsv(f, skip = 1, n_max = length(contaminants) + 1, show_col_types = FALSE) |>
+        filter(Genome %in% contaminants) |>
+        transmute(Sample = str_remove(basename(f), "_screen.txt$"),
+                  Genome,
+                  OnlyRate = paste0(round(`%One_hit_one_genome` + `%Multiple_hits_one_genome`, 2), "%"))) |>
+    pivot_wider(names_from = Genome, values_from = OnlyRate, names_glue = "{Genome}OnlyRate")
 
 result <- left_join(df1, df2, by=c("Sample"="Sample")) |>
           left_join(df3, by=c("Sample"="Sample"))

@@ -57,10 +57,10 @@ set-resources:
     mem_mb: 8000
     runtime: 120
 
-  find_ecoli_reads:
+  screen_contaminants:
     threads: 4
-    mem_mb: 8000
-    runtime: 480
+    mem_mb: 12000
+    runtime: 240
 
   bam_to_bed:
     threads: 2

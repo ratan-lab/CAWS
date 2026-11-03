@@ -278,10 +278,14 @@ wget https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.chrom.sizes
 wget https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_47/gencode.v47.annotation.gtf.gz
 gunzip gencode.v47.annotation.gtf.gz
 
-# E. coli reference (for spike-in normalization)
+# Contaminant genomes for FastQ Screen (QC only)
+# E. coli (pA-Tn5 carry-over)
 wget ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/005/845/GCF_000005845.2_ASM584v2/GCF_000005845.2_ASM584v2_genomic.fna.gz
 gunzip GCF_000005845.2_ASM584v2_genomic.fna.gz
 bowtie2-build GCF_000005845.2_ASM584v2_genomic.fna ecoli_index
+# Bovine (BSA / serum carry-over); building this index takes a few hours
+wget https://ftp.ensembl.org/pub/release-110/fasta/bos_taurus/dna/Bos_taurus.ARS-UCD1.2.dna.toplevel.fa.gz
+bowtie2-build --threads 8 Bos_taurus.ARS-UCD1.2.dna.toplevel.fa.gz bovine_index
 ```
 
 ### Step 3: Create Sample Sheet
@@ -310,8 +314,11 @@ Create `config.json`:
     "reference_fai": "/path/to/hg38.fa.fai",
     "chromosome_file": "/path/to/hg38.chrom.sizes",
     "blacklist": "/path/to/hg38-blacklist.v2.bed",
-    "ecoli_reference": "/path/to/GCF_000005845.2_ASM584v2_genomic.fna",
-    "ecoli_bt2_idx": "/path/to/ecoli_index",
+    "contaminant_genomes": {
+        "Ecoli": "/path/to/ecoli_index",
+        "Bovine": "/path/to/bovine_index"
+    },
+    "contaminant_subset": 1000000,
     "gtf_file": "/path/to/gencode.v47.annotation.gtf",
     "trim_adapters": true,
     "igg_control": true,
@@ -441,8 +448,8 @@ The interactive report includes:
 | `reference_fai` | FASTA index file |
 | `chromosome_file` | List of chromosomes to include |
 | `blacklist` | BED file of genomic regions to exclude |
-| `ecoli_reference` | E. coli reference genome (for contamination assessment) |
-| `ecoli_bt2_idx` | Bowtie2 index prefix for E. coli |
+| `contaminant_genomes` | Map of contaminant name → Bowtie2 index prefix, screened with FastQ Screen against the host genome (e.g., `{"Ecoli": "...", "Bovine": "..."}`). Names must be alphanumeric/underscore; `Host` is reserved |
+| `contaminant_subset` | Number of read 1 sequences sampled per library for FastQ Screen (default `1000000`; `0` screens all reads) |
 | `trim_adapters` | `true`/`false` — enable adapter trimming via Trim Galore |
 | `igg_control` | `true`/`false` — use IgG controls as background for peak calling |
 | `mt_chrom` | Name of mitochondrial chromosome (e.g., `"chrM"`) |
@@ -466,8 +473,11 @@ The interactive report includes:
     "reference_fai": "/share/gatk_bundle/hg38/hs38DH.fa.fai",
     "chromosome_file": "/share/gatk_bundle/hg38/hs38DH.primary.txt",
     "blacklist": "/share/gatk_bundle/hg38/blacklist.bed.gz",
-    "ecoli_reference": "/share/gatk_bundle/ecoli/MG1655.fa",
-    "ecoli_bt2_idx": "/share/gatk_bundle/ecoli/MG1655",
+    "contaminant_genomes": {
+        "Ecoli": "/share/gatk_bundle/ecoli/MG1655",
+        "Bovine": "/share/gatk_bundle/bovine/ARS-UCD1.2"
+    },
+    "contaminant_subset": 1000000,
     "trim_adapters": true,
     "igg_control": false,
     "mt_chrom": "chrM",
@@ -596,7 +606,7 @@ tail -f logs/rulename/*   # Watch specific rule logs
 - Alignment (**Bowtie2**)
 - Duplicate removal (**Picard**)
 - Peak calling (**SEACR** & **MACS3**)
-- Contamination detection (mtDNA, *E. coli*)
+- Contamination screening (**FastQ Screen**: *E. coli*, bovine, or any configured genome; mtDNA fraction)
 - Fragment size & correlation analysis (PE only)
 - FRiP score and reproducibility metrics
 
@@ -615,7 +625,7 @@ tail -f logs/rulename/*   # Watch specific rule logs
 
 ```
 output_directory/
-├── qc/                  # FastQC reports
+├── qc/                  # FastQC reports; fastq_screen/ contaminant screens
 ├── trimmed/             # Adapter-trimmed reads
 ├── alignments/          # Alignment stats, fragment lengths, bigwigs (raw BAMs removed when dedup=true)
 ├── dedupalignments/     # Deduplicated BAMs (quality-filtered versions preserved)
