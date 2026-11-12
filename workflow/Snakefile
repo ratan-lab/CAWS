@@ -1358,7 +1358,7 @@ rule region_profile:
     threads: 4
     params:
         labels=" ".join(SAMPLES),
-        colors=" ".join(OKABE_ITO[i % len(OKABE_ITO)] for i in range(len(SAMPLES))),
+        colors=" ".join(f"'{OKABE_ITO[i % len(OKABE_ITO)]}'" for i in range(len(SAMPLES))),
     shell:
         """
         computeMatrix reference-point -S {input.bw} -R {input.points} --samplesLabel {params.labels} \\
