@@ -323,10 +323,8 @@ def validate_mixed_samplesheet():
 
     # Report results
     if errors:
-        print("❌ Samplesheet validation errors:")
-        for error in errors:
-            print(f"  {error}")
-        raise ValueError("Samplesheet validation failed")
+        # in the exception message, so the errors are shown even when stdout is lost
+        raise ValueError("Samplesheet validation failed:\n" + "\n".join(f"  {e}" for e in errors))
 
     if warnings:
         print("⚠️  Samplesheet validation warnings:")
