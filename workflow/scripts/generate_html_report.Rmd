@@ -78,8 +78,6 @@ create_enhanced_datatable <- function(data, filename_prefix, caption = "") {
 }
 
 # Read input data - use absolute paths based on Snakemake working directory
-samplesheet <- read_data(snakemake@params[["samplesheet"]])
-
 # Get the working directory from Snakemake parameters
 workdir <- snakemake@params[["outdir"]]
 
@@ -103,16 +101,13 @@ macs3_frip <- read_data(get_abs_path(as.character(snakemake@input[["macs3_frip"]
 macs3_width <- read_data(get_abs_path(as.character(snakemake@input[["macs3_width"]])))
 consolidated <- read_data(get_abs_path(as.character(snakemake@input[["consolidated"]])))
 consensus <- read_data(get_abs_path(as.character(snakemake@input[["consensus"]])))
-
-# Read TSS enrichment if available
-tss_enrichment <- NULL
-if (length(as.character(snakemake@input[["tss_enrichment"]])) > 0) {
-  tss_path <- get_abs_path(as.character(snakemake@input[["tss_enrichment"]]))
-  if (file.exists(tss_path)) {
-    tss_enrichment <- read_data(tss_path) |>
-        mutate(sample_id = str_replace_all(sample_id, "_raw", ""))
-  }
-}
+# one row per sample: sampleID, condition, group, input, units, layout, deduplicated
+samplesheet <- read_data(get_abs_path(as.character(snakemake@input[["samples"]])))
+# enrichment over region sets (TSS and enrichment_regions)
+region_enrichment <- read_data(get_abs_path(as.character(snakemake@input[["regions"]])))
+tss_enrichment <- region_enrichment |>
+  filter(region == "TSS", sample != "consensus") |>
+  select(sample_id = sample, TSS_profile_score = profile_score)
 ```
 
 Sample Details {data-icon="fa-list-alt"}
@@ -135,7 +130,7 @@ if (nrow(consolidated) > 0) {
     ) |>
     select(-c(seacr_peakN, macs3_peakN, seacr_FRiP, macs3_FRiP, seacr_median_gc, macs3_median_gc))
 
-  if (!is.null(tss_enrichment) && nrow(tss_enrichment) > 0) {
+  if (nrow(tss_enrichment) > 0) {
     summary_stats <- left_join(summary_stats, tss_enrichment, by = c("sampleID" = "sample_id")) |> distinct()
   }
 
@@ -735,3 +730,50 @@ MACS3 Peaks {data-icon="fa-network-wired"}
 macs3_similarity <- calculate_peak_similarity_from_files(macs3_peak_files, macs3_suffix, "MACS3")
 create_similarity_matrix_plot(macs3_similarity, "MACS3")
 ```
+
+Region Enrichment {data-icon="fa-crosshairs"}
+=======================================================================
+
+Column {data-width=550}
+-----------------------------------------------------------------------
+
+### Enrichment over region sets
+
+```{r}
+# profile_score: signal at the region reference points vs. flanks; reads_fold: share of
+# fragments in the regions / share of the genome they cover; *_peaks_fold: peaks overlapping
+# the regions vs. shuffled peaks; *_vs_igg: sample / matched IgG control
+if (nrow(region_enrichment) > 0) {
+  create_enhanced_datatable(
+    region_enrichment,
+    filename_prefix = "region_enrichment",
+    caption = "Enrichment over TSSs and user-supplied region sets (see README, Region Enrichment)"
+  )
+} else {
+  div(class = "alert alert-info", "No region sets: provide gtf_file and/or enrichment_regions in the configuration")
+}
+```
+
+Column {data-width=450}
+-----------------------------------------------------------------------
+
+### Reads in regions (fold over genome fraction)
+
+```{r}
+reads_plot_data <- region_enrichment |> filter(sample != "consensus", !is.na(reads_fold))
+if (nrow(reads_plot_data) > 0) {
+  reads_plot <- reads_plot_data |>
+    ggplot(aes(x = sample, y = reads_fold, fill = condition)) +
+    geom_col(alpha = 0.85) +
+    geom_hline(yintercept = 1, linetype = "dashed", colour = "grey40") +
+    facet_wrap(~ region, scales = "free_y", ncol = 1) +
+    scale_fill_viridis_d(option = "plasma", begin = 0.1, end = 0.85) +
+    simple_theme() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(x = "", y = "Fold enrichment", fill = "Condition")
+  ggplotly(reads_plot)
+} else {
+  div(class = "alert alert-info", "No region enrichment data")
+}
+```
+

@@ -14,56 +14,125 @@ include: "rules/common.smk"
 
 workdir: config["outdir"]
 
-samplesheet = pd.read_csv(
+import gzip
+import struct
+
+# Samplesheet: one row per sequencing run ("unit"). Rows that share a sampleID are
+# technical replicates (lanes/runs of one library) and are merged after alignment.
+# read1 may be a FASTQ (read2 = mate or empty) or a BAM file (read2 empty).
+units = pd.read_csv(
     config["samplesheet"],
     sep="\t",
-    dtype={
-        "sampleID": str,
-        "condition": str,
-        "group": str,
-        "read1": str,
-        "read2": str,
-    },
+    dtype=str,
     na_values=['', 'NA', 'na', 'N/A', 'n/a', 'NULL', 'null', 'None', 'none', '-'],
     skipinitialspace=True,
     keep_default_na=True
-).set_index("sampleID")
-
-# Strip whitespace from all string columns to handle user input issues
-for col in ['condition', 'group', 'read1', 'read2']:
-    samplesheet[col] = samplesheet[col].astype(str).str.strip()
+)
+missing_cols = {"sampleID", "condition", "group", "read1", "read2"} - set(units.columns)
+assert not missing_cols, f"samplesheet is missing columns: {sorted(missing_cols)}"
+for col in ["sampleID", "condition", "group", "read1"]:
+    units[col] = units[col].astype(str).str.strip()
+units["read2"] = units["read2"].str.strip()
 
 # Enhanced NA detection for mixed single-end/paired-end support
 def is_missing_read2(read2_value):
     """Check if read2 value indicates missing/absent file"""
     if pd.isna(read2_value):
         return True
-
-    # Convert to string and normalize
-    str_value = str(read2_value).strip().lower()
-
-    # List of values that indicate missing read2
     missing_indicators = {
         '', 'na', 'n/a', 'null', 'none', '-',
         'nan', 'nil', 'empty', '0', 'false',
         'missing', 'absent', 'single', 'se'
     }
+    return str(read2_value).strip().lower() in missing_indicators
 
-    return str_value in missing_indicators
+def bam_info(path, max_records=1000):
+    """Reference sequences (name -> length) and flags of the first records of a BAM file."""
+    with gzip.open(path, "rb") as f:  # BAM is BGZF, a series of gzip members
+        if f.read(4) != b"BAM\1":
+            raise ValueError(f"{path} is not a BAM file")
+        l_text, = struct.unpack("<i", f.read(4))
+        f.read(l_text)
+        n_ref, = struct.unpack("<i", f.read(4))
+        refs = {}
+        for _ in range(n_ref):
+            l_name, = struct.unpack("<i", f.read(4))
+            name = f.read(l_name)[:-1].decode()
+            refs[name], = struct.unpack("<i", f.read(4))
+        flags = []
+        while len(flags) < max_records:
+            head = f.read(4)
+            if len(head) < 4:
+                break
+            block_size, = struct.unpack("<i", head)
+            record = f.read(block_size)
+            flags.append(struct.unpack("<H", record[14:16])[0])
+    return refs, flags
 
-# Apply enhanced detection
-samplesheet['is_paired'] = ~samplesheet['read2'].apply(is_missing_read2)
+units["is_bam"] = units["read1"].str.lower().str.endswith(".bam")
+units["unit"] = units["sampleID"] + "." + (units.groupby("sampleID").cumcount() + 1).astype(str)
+UNIT_ERRORS = []
+BAM_REFS = {}
+paired = []
+for _, row in units.iterrows():
+    if not row["is_bam"]:
+        paired.append(not is_missing_read2(row["read2"]))
+        continue
+    if not is_missing_read2(row["read2"]):
+        UNIT_ERRORS.append(f"Sample {row['sampleID']}: read2 must be empty when read1 is a BAM file ({row['read1']})")
+    if not os.path.exists(row["read1"]):
+        paired.append(False)
+        continue
+    refs, flags = bam_info(row["read1"])
+    BAM_REFS[row["unit"]] = refs
+    is_pe = any(f & 0x1 for f in flags)
+    if is_pe and not (any(f & 0x40 for f in flags) and any(f & 0x80 for f in flags)):
+        UNIT_ERRORS.append(f"Sample {row['sampleID']}: paired-end BAM {row['read1']} does not contain both mates")
+    paired.append(is_pe)
+units["is_paired"] = paired
+units = units.set_index("unit")
 
-# check the sample names are unique
-assert samplesheet.index.is_unique, "sampleIDs in the samplesheet are not unique"
+# One row per sample (biological replicate); the runs of a sample must agree on these
+sample_rows = []
+for sid, g in units.groupby("sampleID", sort=False):
+    for col in ("condition", "group", "is_paired"):
+        if g[col].nunique() > 1:
+            UNIT_ERRORS.append(f"Sample {sid}: all rows must have the same {'read layout' if col == 'is_paired' else col}")
+    dedup_values = sorted({str(v).strip().lower() for v in g["dedup"].dropna()} - {""}) if "dedup" in g else []
+    if len(dedup_values) > 1:
+        UNIT_ERRORS.append(f"Sample {sid}: rows disagree in the dedup column ({dedup_values})")
+    sample_rows.append({
+        "sampleID": sid,
+        "condition": g["condition"].iloc[0],
+        "group": g["group"].iloc[0],
+        "is_paired": bool(g["is_paired"].iloc[0]),
+        "dedup": dedup_values[0] if dedup_values else "",
+        "input": "BAM" if g["is_bam"].all() else ("FASTQ" if not g["is_bam"].any() else "FASTQ+BAM"),
+        "units": len(g),
+    })
+samplesheet = pd.DataFrame(sample_rows).set_index("sampleID")
+SAMPLE_UNITS = {sid: units.index[units["sampleID"] == sid].tolist() for sid in samplesheet.index}
+UNIT_LIST = units.index.tolist()
+FASTQ_PE_UNITS = units.index[~units["is_bam"] & units["is_paired"]].tolist()
+FASTQ_SE_UNITS = units.index[~units["is_bam"] & ~units["is_paired"]].tolist()
+BAM_UNITS = units.index[units["is_bam"]].tolist()
+
+def constraint(names, empty):
+    return "|".join(re.escape(n) for n in names) or empty
 
 # optional settings (defaults keep older config files working)
 config.setdefault("dedup", "controls")
 config.setdefault("macs3_broad", False)
 config.setdefault("macs3_broad_cutoff", 0.1)
 config.setdefault("consensus_min_replicates", 2)
-assert config["dedup"] in (True, False, "controls"), \
-    "dedup must be true, false or \"controls\""
+config.setdefault("enrichment_regions", {})
+DEDUP_CONFIG = config["dedup"] if isinstance(config["dedup"], dict) else {"default": config["dedup"]}
+DEDUP_DEFAULT = DEDUP_CONFIG.get("default", "controls")
+DEDUP_CONDITIONS = {c: v for c, v in DEDUP_CONFIG.items() if c != "default"}
+assert DEDUP_DEFAULT in (True, False, "controls"), 'dedup (or dedup["default"]) must be true, false or "controls"'
+for c, v in DEDUP_CONDITIONS.items():
+    assert isinstance(v, bool), f'dedup["{c}"] must be true or false'
+    assert c in set(samplesheet["condition"]), f'dedup["{c}"]: no samples with condition "{c}" in the samplesheet'
 assert int(config["consensus_min_replicates"]) >= 1, "consensus_min_replicates must be >= 1"
 
 # validate IgG control setup if enabled
@@ -107,17 +176,20 @@ CONTROL = samplesheet[samplesheet["condition"] == "Control"].index.tolist()
 PE_SAMPLES = get_pe_samples()
 SE_SAMPLES = get_se_samples()
 
-# Duplicate removal per sample: the optional samplesheet column "dedup" (yes/no)
-# overrides the global setting (true = all, false = none, "controls" = IgG only)
+# Duplicate removal per sample. Precedence: samplesheet "dedup" column (yes/no) >
+# per-condition setting in config (dedup: {"BG4": true, ...}) > default
+# (true = all, false = none, "controls" = IgG only)
 def default_dedup(sample):
-    if config["dedup"] == "controls":
+    condition = samplesheet.loc[sample, "condition"]
+    if condition in DEDUP_CONDITIONS:
+        return DEDUP_CONDITIONS[condition]
+    if DEDUP_DEFAULT == "controls":
         return sample in CONTROL
-    return bool(config["dedup"])
+    return bool(DEDUP_DEFAULT)
 
 DEDUP = {}
 for s in SAMPLES:
-    value = samplesheet.loc[s, "dedup"] if "dedup" in samplesheet.columns else None
-    value = "" if pd.isna(value) else str(value).strip().lower()
+    value = samplesheet.loc[s, "dedup"]
     if value in ("", "default"):
         DEDUP[s] = default_dedup(s)
     elif value in ("yes", "true", "1"):
@@ -146,11 +218,6 @@ def condition_controls(condition):
     groups = samplesheet.loc[CONDITION_SAMPLES[condition], "group"].unique()
     return samplesheet.index[(samplesheet["condition"] == "Control") & samplesheet["group"].isin(groups)].tolist()
 
-wildcard_constraints:
-    sample="|".join(re.escape(s) for s in SAMPLES),
-    condition="|".join(re.escape(c) for c in CONSENSUS_CONDITIONS) or "NO_CONSENSUS_CONDITIONS",
-    caller="seacr|macs3",
-
 def consensus_threshold(condition):
     return min(int(config["consensus_min_replicates"]), len(CONDITION_SAMPLES[condition]))
 
@@ -166,6 +233,30 @@ def pooled_peaks(caller, condition):
 CONSENSUS_FILES = expand("peaks/consensus/{caller}/{condition}.consensus.bed",
                          caller=["seacr", "macs3"], condition=CONSENSUS_CONDITIONS)
 
+# Region sets for enrichment: TSS (from the GTF) plus user BED files (enrichment_regions)
+USER_REGIONS = dict(config["enrichment_regions"] or {})
+for name in USER_REGIONS:
+    assert re.fullmatch(r"[A-Za-z0-9._-]+", name), \
+        f"enrichment_regions name '{name}' may only contain letters, digits, '.', '_' and '-'"
+    assert not (name == "TSS" and config["gtf_file"]), "the region set name 'TSS' is reserved when gtf_file is set"
+REGION_FILES = ({"TSS": "annotations/tss.bed"} if config["gtf_file"] else {}) | USER_REGIONS
+REGIONS = list(REGION_FILES)
+
+def matched_control(sample):
+    """IgG control of the sample's group (None for controls or groups without one)."""
+    if sample in CONTROL:
+        return None
+    group = samplesheet.loc[sample, "group"]
+    controls = [c for c in CONTROL if samplesheet.loc[c, "group"] == group]
+    return controls[0] if controls else None
+
+wildcard_constraints:
+    sample="|".join(re.escape(s) for s in SAMPLES),
+    unit=constraint(UNIT_LIST, "NO_UNITS"),
+    condition="|".join(re.escape(c) for c in CONSENSUS_CONDITIONS) or "NO_CONSENSUS_CONDITIONS",
+    caller="seacr|macs3",
+    region=constraint(REGIONS, "NO_REGIONS"),
+
 # Enhanced validation for mixed samplesheets
 def validate_mixed_samplesheet():
     """Comprehensive validation for mixed SE/PE samplesheets"""
@@ -174,18 +265,45 @@ def validate_mixed_samplesheet():
     errors = []
     warnings = []
 
-    for sample_id, row in samplesheet.iterrows():
+    errors.extend(UNIT_ERRORS)
+    for unit, row in units.iterrows():
+        sample_id = row["sampleID"]
         # Validate read1 (always required)
         if not os.path.exists(row['read1']):
             errors.append(f"Sample {sample_id}: Read1 file not found: {row['read1']}")
 
-        # Validate read2 for paired-end samples
-        if row['is_paired']:
+        # Validate read2 for paired-end FASTQ input
+        if not row["is_bam"] and row['is_paired']:
             if pd.isna(row['read2']) or not os.path.exists(row['read2']):
                 errors.append(f"Sample {sample_id}: Marked as paired-end but read2 file missing/invalid: {row['read2']}")
-        else:
-            if not pd.isna(row['read2']) and str(row['read2']).strip() not in ['', '-', 'NA', 'na', 'NULL', 'null', 'nan', 'NaN']:
-                warnings.append(f"Sample {sample_id}: Marked as single-end but has read2 value: {row['read2']}")
+
+    # region files for enrichment: present, non-empty, chromosome names matching the reference
+    fai_names = {line.split("\t")[0] for line in open(config["reference_fai"]) if line.strip()}
+    for name, path in USER_REGIONS.items():
+        if not os.path.exists(path):
+            errors.append(f"enrichment_regions['{name}']: file not found: {path}")
+            continue
+        with (gzip.open(path, "rt") if path.endswith(".gz") else open(path)) as f:
+            chroms_seen = set()
+            for line in f:
+                if line.strip() and not line.startswith(("#", "track", "browser")):
+                    chroms_seen.add(line.split("\t")[0])
+                    if len(chroms_seen) > 1000:
+                        break
+        if not chroms_seen:
+            errors.append(f"enrichment_regions['{name}']: {path} contains no regions")
+        elif not chroms_seen & fai_names:
+            errors.append(f"enrichment_regions['{name}']: chromosome names in {path} do not match the reference "
+                          f"(e.g. '{sorted(chroms_seen)[0]}'; expected names like '{sorted(fai_names)[0]}')")
+
+    # BAM input must be aligned to the configured reference (same chromosome names and lengths)
+    fai = dict(line.rstrip("\n").split("\t")[:2] for line in open(config["reference_fai"]) if line.strip())
+    chroms = [line.strip() for line in open(config["chromosome_file"]) if line.strip()]
+    for unit, refs in BAM_REFS.items():
+        bad = [c for c in chroms if c not in refs or str(refs[c]) != fai.get(c)]
+        if bad:
+            errors.append(f"Sample {units.loc[unit, 'sampleID']}: BAM {units.loc[unit, 'read1']} is not aligned to "
+                          f"the configured reference (chromosomes missing or with different lengths: {bad[:5]})")
 
     # Validate that experimental samples and their controls have compatible sequencing types
     if config["igg_control"]:
@@ -220,6 +338,15 @@ def validate_mixed_samplesheet():
     print(f"   📊 {len(SE_SAMPLES)} single-end samples: {SE_SAMPLES}")
     print(f"   📈 Fragment analysis will be performed for {len(PE_SAMPLES)} paired-end samples only")
     print(f"   🧬 Duplicates removed for: {[s for s in SAMPLES if DEDUP[s]] or 'none'}")
+    multi = {s: len(u) for s, u in SAMPLE_UNITS.items() if len(u) > 1}
+    if multi:
+        print(f"   🔗 Runs merged per sample (technical replicates): {multi}")
+    if BAM_UNITS:
+        print(f"   📦 BAM input: {sorted({units.loc[u, 'sampleID'] for u in BAM_UNITS})}")
+    for condition, members in CONDITION_SAMPLES.items():
+        if len({DEDUP[m] for m in members}) > 1:
+            print(f"⚠️  Condition {condition}: duplicates removed for {[m for m in members if DEDUP[m]]} but not for "
+                  f"{[m for m in members if not DEDUP[m]]}; its consensus peaks pool deduplicated and non-deduplicated data")
     single = sorted(set(CONDITION_SAMPLES) - set(CONSENSUS_CONDITIONS))
     if single:
         print(f"   ℹ️  No consensus peaks for single-replicate conditions: {single}")
@@ -229,8 +356,7 @@ validate_mixed_samplesheet()
 
 rule all:
     input:
-        expand("qc/{sample}_1", sample=SAMPLES),
-        expand("qc/{sample}_2", sample=SAMPLES),
+        expand("qc/{unit}_{r}", unit=UNIT_LIST, r=[1, 2]),
         "stats/stats.txt",
         "stats/peaks_consolidated.txt",
         expand("stats/seacr/{sample}.heatmap.png", sample=EXPERIMENT),
@@ -238,7 +364,7 @@ rule all:
         expand("stats/macs3/{sample}_gc_content.txt", sample=EXPERIMENT),
         # Fragment analysis only for paired-end samples
         expand("alignments/{sample}.fraglengths.txt", sample=PE_SAMPLES),
-        "stats/tss_enrichment.txt" if config["gtf_file"] else [],
+        "stats/region_enrichment.txt",
         "reports/cutntag_analysis_report.html",
         expand("tdf/{sample}.tdf", sample=SAMPLES),
         CONSENSUS_FILES,
@@ -248,17 +374,33 @@ rule all:
         "tdf/igv_session.xml",
 
 
+def trim_link(unit, mate=0):
+    """Name under which a unit's FASTQ is passed to Trim Galore, so its report and the
+    sample name MultiQC reads from it are the unit, not the (possibly repeated) file name."""
+    gz = ".gz" if units.loc[unit, "read2" if mate == 2 else "read1"].endswith(".gz") else ""
+    return f"trimmed/input/{unit}{f'_R{mate}' if mate else ''}.fastq{gz}"
+
+
+def trimmed_reads(unit, mate):
+    """Trimmed FASTQ of a unit (mate 1 or 2), or the raw FASTQ when trimming is disabled."""
+    if not config["trim_adapters"]:
+        return units.loc[unit, "read1" if mate == 1 else "read2"]
+    if units.loc[unit, "is_paired"]:
+        return f"trimmed/{unit}_val_{mate}.fq.gz"
+    return f"trimmed/{unit}_trimmed.fq.gz"
+
+
 rule check_quality_pe:
     input:
-        r1="trimmed/{sample}_val_1.fq.gz" if config["trim_adapters"] else r1_from_sample,
-        r2="trimmed/{sample}_val_2.fq.gz" if config["trim_adapters"] else r2_from_sample,
+        r1=lambda w: trimmed_reads(w.unit, 1),
+        r2=lambda w: trimmed_reads(w.unit, 2),
     output:
-        out1=directory("qc/{sample}_1"),
-        out2=directory("qc/{sample}_2"),
+        out1=directory("qc/{unit}_1"),
+        out2=directory("qc/{unit}_2"),
     wildcard_constraints:
-        sample="|".join(PE_SAMPLES) if PE_SAMPLES else "NO_PE_SAMPLES"
+        unit=constraint(FASTQ_PE_UNITS, "NO_PE_UNITS"),
     log:
-        "logs/check_quality_pe/{sample}.log",
+        "logs/check_quality_pe/{unit}.log",
     conda:
         "envs/fastqc.yaml"
     shell:
@@ -270,14 +412,14 @@ rule check_quality_pe:
 
 rule check_quality_se:
     input:
-        r1="trimmed/{sample}_trimmed.fq.gz" if config["trim_adapters"] else r1_from_sample,
+        r1=lambda w: trimmed_reads(w.unit, 1),
     output:
-        out1=directory("qc/{sample}_1"),
-        out2=directory("qc/{sample}_2"),
+        out1=directory("qc/{unit}_1"),
+        out2=directory("qc/{unit}_2"),
     wildcard_constraints:
-        sample="|".join(SE_SAMPLES) if SE_SAMPLES else "NO_SE_SAMPLES"
+        unit=constraint(FASTQ_SE_UNITS, "NO_SE_UNITS"),
     log:
-        "logs/check_quality_se/{sample}.log",
+        "logs/check_quality_se/{unit}.log",
     conda:
         "envs/fastqc.yaml"
     shell:
@@ -287,56 +429,89 @@ rule check_quality_se:
         echo "SINGLE_END_NO_R2_DATA" > {output.out2}/se_placeholder.txt
         """
 
+rule check_quality_bam:
+    input:
+        bam=lambda w: units.loc[w.unit, "read1"],
+    output:
+        out1=directory("qc/{unit}_1"),
+        out2=directory("qc/{unit}_2"),
+    wildcard_constraints:
+        unit=constraint(BAM_UNITS, "NO_BAM_UNITS"),
+    log:
+        "logs/check_quality_bam/{unit}.log",
+    conda:
+        "envs/fastqc.yaml"
+    shell:
+        """
+        # FastQC reads BAM input directly (all reads, both mates)
+        mkdir -p {output.out1} {output.out2}
+        fastqc -o {output.out1} {input.bam}
+        echo "BAM_INPUT_SEE_READ1_REPORT" > {output.out2}/bam_placeholder.txt
+        """
+
 
 rule trim_adapters_pe:
     input:
-        r1=r1_from_sample,
-        r2=r2_from_sample,
+        r1=lambda w: units.loc[w.unit, "read1"],
+        r2=lambda w: units.loc[w.unit, "read2"],
     output:
-        out1="trimmed/{sample}_val_1.fq.gz",
-        out2="trimmed/{sample}_val_2.fq.gz",
+        out1="trimmed/{unit}_val_1.fq.gz",
+        out2="trimmed/{unit}_val_2.fq.gz",
     wildcard_constraints:
-        sample="|".join(PE_SAMPLES) if PE_SAMPLES else "NO_PE_SAMPLES"
+        unit=constraint(FASTQ_PE_UNITS, "NO_PE_UNITS"),
     log:
-        "logs/trim_adapters_pe/{sample}.log",
+        "logs/trim_adapters_pe/{unit}.log",
     conda:
         "envs/trim_galore.yaml"
+    params:
+        r1=lambda w, input: os.path.abspath(input.r1),
+        r2=lambda w, input: os.path.abspath(input.r2),
+        link1=lambda w: trim_link(w.unit, 1),
+        link2=lambda w: trim_link(w.unit, 2),
     shell:
         """
-        trim_galore --gzip --trim-n -o trimmed --basename {wildcards.sample} --paired {input.r1} {input.r2}
+        mkdir -p trimmed/input
+        ln -sf {params.r1} {params.link1}
+        ln -sf {params.r2} {params.link2}
+        trim_galore --gzip --trim-n -o trimmed --basename {wildcards.unit} --paired {params.link1} {params.link2}
+        rm -f {params.link1} {params.link2}
         """
 
 rule trim_adapters_se:
     input:
-        r1=r1_from_sample,
+        r1=lambda w: units.loc[w.unit, "read1"],
     output:
-        out1="trimmed/{sample}_trimmed.fq.gz",
-        out2="trimmed/{sample}_SE_placeholder.txt",
+        out1="trimmed/{unit}_trimmed.fq.gz",
     wildcard_constraints:
-        sample="|".join(SE_SAMPLES) if SE_SAMPLES else "NO_SE_SAMPLES"
+        unit=constraint(FASTQ_SE_UNITS, "NO_SE_UNITS"),
     log:
-        "logs/trim_adapters_se/{sample}.log",
+        "logs/trim_adapters_se/{unit}.log",
     conda:
         "envs/trim_galore.yaml"
+    params:
+        r1=lambda w, input: os.path.abspath(input.r1),
+        link1=lambda w: trim_link(w.unit),
     shell:
         """
-        trim_galore --gzip --trim-n -o trimmed --basename {wildcards.sample} {input.r1}
-        echo "SINGLE_END_NO_R2_TRIMMED" > {output.out2}
+        mkdir -p trimmed/input
+        ln -sf {params.r1} {params.link1}
+        trim_galore --gzip --trim-n -o trimmed --basename {wildcards.unit} {params.link1}
+        rm -f {params.link1}
         """
 
 
 rule align_reads_pe:
     input:
         ref=config["reference_fa"],
-        r1="trimmed/{sample}_val_1.fq.gz" if config["trim_adapters"] else r1_from_sample,
-        r2="trimmed/{sample}_val_2.fq.gz" if config["trim_adapters"] else r2_from_sample,
+        r1=lambda w: trimmed_reads(w.unit, 1),
+        r2=lambda w: trimmed_reads(w.unit, 2),
     output:
-        sam=temp("alignments/{sample}.sam"),
-        log="alignments/{sample}.alignments.txt",
+        sam=temp("alignments/units/{unit}.sam"),
+        log="alignments/units/{unit}.bowtie2.txt",
     wildcard_constraints:
-        sample="|".join(PE_SAMPLES) if PE_SAMPLES else "NO_PE_SAMPLES"
+        unit=constraint(FASTQ_PE_UNITS, "NO_PE_UNITS"),
     log:
-        "logs/align_reads_pe/{sample}.log",
+        "logs/align_reads_pe/{unit}.log",
     conda:
         "envs/bowtie.yaml"
     threads: 8
@@ -351,14 +526,14 @@ rule align_reads_pe:
 rule align_reads_se:
     input:
         ref=config["reference_fa"],
-        r1="trimmed/{sample}_trimmed.fq.gz" if config["trim_adapters"] else r1_from_sample,
+        r1=lambda w: trimmed_reads(w.unit, 1),
     output:
-        sam=temp("alignments/{sample}.sam"),
-        log="alignments/{sample}.alignments.txt",
+        sam=temp("alignments/units/{unit}.sam"),
+        log="alignments/units/{unit}.bowtie2.txt",
     wildcard_constraints:
-        sample="|".join(SE_SAMPLES) if SE_SAMPLES else "NO_SE_SAMPLES"
+        unit=constraint(FASTQ_SE_UNITS, "NO_SE_UNITS"),
     log:
-        "logs/align_reads_se/{sample}.log",
+        "logs/align_reads_se/{unit}.log",
     conda:
         "envs/bowtie.yaml"
     threads: 8
@@ -373,18 +548,58 @@ rule align_reads_se:
 
 rule convert_to_binary:
     input:
-        "alignments/{sample}.sam",
+        "alignments/units/{unit}.sam",
     output:
-        # raw BAM is superseded by dedupalignments/ when dedup is enabled
-        bam=temp("alignments/{sample}.sorted.bam"),
+        bam=temp("alignments/units/{unit}.bam"),
+    wildcard_constraints:
+        unit=constraint(FASTQ_PE_UNITS + FASTQ_SE_UNITS, "NO_FASTQ_UNITS"),
     log:
-        "logs/convert_to_binary/{sample}.log",
+        "logs/convert_to_binary/{unit}.log",
     conda:
         "envs/samtools.yaml"
     threads: 2
     shell:
         """
         samtools view -S -b {input} | samtools sort -@ {threads} -o {output.bam}
+        """
+
+rule import_bam:
+    input:
+        bam=lambda w: units.loc[w.unit, "read1"],
+    output:
+        bam=temp("alignments/units/{unit}.bam"),
+    wildcard_constraints:
+        unit=constraint(BAM_UNITS, "NO_BAM_UNITS"),
+    log:
+        "logs/import_bam/{unit}.log",
+    conda:
+        "envs/samtools.yaml"
+    threads: 2
+    shell:
+        """
+        # user-supplied alignments: coordinate-sort (input may be unsorted or name-sorted)
+        samtools sort -@ {threads} -o {output.bam} {input.bam} 2> {log}
+        """
+
+rule merge_units:
+    input:
+        lambda w: expand("alignments/units/{unit}.bam", unit=SAMPLE_UNITS[w.sample]),
+    output:
+        bam=temp("alignments/{sample}.sorted.bam"),
+    log:
+        "logs/merge_units/{sample}.log",
+    conda:
+        "envs/samtools.yaml"
+    threads: 2
+    shell:
+        """
+        # runs (technical replicates) of a sample are merged before duplicate removal
+        bams=({input})
+        if [ ${{#bams[@]}} -eq 1 ]; then
+            cp {input} {output.bam}
+        else
+            samtools merge -f -@ {threads} -o {output.bam} {input} 2> {log}
+        fi
         """
 
 
@@ -457,20 +672,131 @@ rule find_mtdna_reads:
         """
 
 
-def screen_input(wildcards):
-    """Read 1 (trimmed if enabled) used for contaminant screening"""
-    if not config["trim_adapters"]:
-        return r1_from_sample(wildcards)
-    if samplesheet.loc[wildcards.sample, "is_paired"]:
-        return f"trimmed/{wildcards.sample}_val_1.fq.gz"
-    return f"trimmed/{wildcards.sample}_trimmed.fq.gz"
+# Alignment statistics from the merged raw BAM (same for FASTQ and BAM input).
+# A fragment is a read pair (paired-end, counted via read 1) or a read (single-end).
+rule alignment_stats:
+    input:
+        bam="alignments/{sample}.sorted.bam",
+        bai="alignments/{sample}.sorted.bam.bai",
+    output:
+        "alignments/{sample}.alnstats.txt",
+    log:
+        "logs/alignment_stats/{sample}.log",
+    conda:
+        "envs/samtools.yaml"
+    params:
+        total=lambda w: "-f 0x40 -F 0x900" if samplesheet.loc[w.sample, "is_paired"] else "-F 0x900",
+        mapped=lambda w: "-f 0x42 -F 0x904" if samplesheet.loc[w.sample, "is_paired"] else "-F 0x904",
+        unaligned=lambda w: "-f 0x44 -F 0x900" if samplesheet.loc[w.sample, "is_paired"] else "-f 0x4 -F 0x900",
+        paired=lambda w: "yes" if samplesheet.loc[w.sample, "is_paired"] else "no",
+    shell:
+        """
+        # paired-end "mapped" = properly paired; "unique" = no alternative alignment (XS tag)
+        # for the read, or for either mate of a pair (as in the Bowtie2 summary)
+        total=$(samtools view -c {params.total} {input.bam})
+        mapped=$(samtools view -c {params.mapped} {input.bam})
+        if [ {params.paired} = yes ]; then
+            multi=$(samtools view -f 0x2 -F 0x904 -e 'exists([XS])' {input.bam} | cut -f 1 | LC_ALL=C sort -u | wc -l)
+            unique=$((mapped - multi))
+        else
+            unique=$(samtools view -c {params.mapped} -e '!exists([XS])' {input.bam})
+        fi
+        unaligned=$(samtools view -c {params.unaligned} {input.bam})
+        printf "total\\t%s\\nmapped\\t%s\\nunique\\t%s\\nunaligned\\t%s\\n" $total $mapped $unique $unaligned > {output}
+        """
+
+# ENCODE library complexity (NRF, PBC1, PBC2) before duplicate removal, after the
+# MAPQ and chromosome filters used for peak calling.
+rule library_complexity:
+    input:
+        bam="alignments/{sample}.sorted.bam",
+        bai="alignments/{sample}.sorted.bam.bai",
+    output:
+        "alignments/{sample}.complexity.txt",
+    log:
+        "logs/library_complexity/{sample}.log",
+    conda:
+        "envs/samtools.yaml"
+    params:
+        chroms=config["chromosome_file"],
+        minq=config["minquality"],
+        paired=lambda w: "yes" if samplesheet.loc[w.sample, "is_paired"] else "no",
+    shell:
+        """
+        if [ {params.paired} = yes ]; then
+            # fragment = chromosome, leftmost position, end (from read 1 of proper pairs)
+            samtools view -q {params.minq} -f 0x42 -F 0x904 {input.bam} $(tr '\\n' ' ' < {params.chroms}) \\
+            | awk -v OFS="\\t" '{{s = ($9 > 0) ? $4 : $8; l = ($9 < 0) ? -$9 : $9; print $3, s, s + l}}'
+        else
+            # read = chromosome, 5' end, strand
+            samtools view -q {params.minq} -F 0x904 {input.bam} $(tr '\\n' ' ' < {params.chroms}) \\
+            | awk -v OFS="\\t" '{{
+                if (int($2 / 16) % 2 == 0) {{print $3, $4, "+"; next}}
+                c = $6; len = 0
+                while (match(c, /^[0-9]+[MIDNSHP=X]/)) {{
+                    n = substr(c, 1, RLENGTH - 1); op = substr(c, RLENGTH, 1)
+                    if (op ~ /[MDN=X]/) len += n
+                    c = substr(c, RLENGTH + 1)
+                }}
+                print $3, $4 + len - 1, "-"}}'
+        fi \\
+        | LC_ALL=C sort -S 1G | uniq -c \\
+        | awk -v OFS="\\t" '{{n = $1; total += n; distinct++; if (n == 1) m1++; if (n == 2) m2++}}
+            END {{print "NRF", "PBC1", "PBC2"
+                 if (distinct == 0) {{print "NA", "NA", "NA"; exit}}
+                 print sprintf("%.3f", distinct / total), sprintf("%.3f", m1 / distinct), (m2 > 0) ? sprintf("%.2f", m1 / m2) : "NA"}}' \\
+        > {output}
+        """
+
+
+# One row per sample (biological replicate) for the R scripts and the report
+SAMPLE_TABLE = samplesheet.reset_index()[["sampleID", "condition", "group", "input", "units"]].assign(
+    layout=["PE" if p else "SE" for p in samplesheet["is_paired"]],
+    deduplicated=["yes" if DEDUP[s] else "no" for s in samplesheet.index],
+).to_csv(sep="\t", index=False)
+
+rule sample_table:
+    output:
+        "stats/samples.tsv",
+    log:
+        "logs/sample_table/job.log",
+    params:
+        table=SAMPLE_TABLE,  # a changed samplesheet or dedup setting changes params and reruns the rule
+    run:
+        with open(output[0], "w") as out:
+            out.write(params.table)
+
+
+def screen_reads(wildcards):
+    """Read 1 of every run of the sample (trimmed if enabled; extracted from BAM input)."""
+    return [f"qc/fastq_screen/units/{u}.R1.fq.gz" if units.loc[u, "is_bam"] else trimmed_reads(u, 1)
+            for u in SAMPLE_UNITS[wildcards.sample]]
+
+
+rule bam_read1:
+    input:
+        bam=lambda w: units.loc[w.unit, "read1"],
+    output:
+        temp("qc/fastq_screen/units/{unit}.R1.fq.gz"),
+    wildcard_constraints:
+        unit=constraint(BAM_UNITS, "NO_BAM_UNITS"),
+    log:
+        "logs/bam_read1/{unit}.log",
+    conda:
+        "envs/samtools.yaml"
+    params:
+        flags=lambda w: "-f 0x40 -F 0x900" if units.loc[w.unit, "is_paired"] else "-F 0x900",
+    shell:
+        """
+        samtools fastq -n {params.flags} {input.bam} 2> {log} | gzip > {output}
+        """
 
 
 # Host genome is screened alongside contaminants so reads shared between
 # genomes are classified as multi-genome rather than counted as contamination
 rule screen_contaminants:
     input:
-        reads=screen_input,
+        reads=screen_reads,
     output:
         txt="qc/fastq_screen/{sample}_screen.txt",
     log:
@@ -489,16 +815,23 @@ rule screen_contaminants:
         tmp=$(mktemp -d qc/fastq_screen/{wildcards.sample}.XXXXXX)
         trap 'rm -rf "$tmp"' EXIT
         printf '%s\\n' {params.databases} > $tmp/fastq_screen.conf
+        # runs of a sample are screened together
+        reads=({input.reads})
+        if [ ${{#reads[@]}} -gt 1 ]; then
+            cat "${{reads[@]}}" > $tmp/{wildcards.sample}.fq.gz
+            reads=($tmp/{wildcards.sample}.fq.gz)
+        fi
         fastq_screen --conf $tmp/fastq_screen.conf --aligner bowtie2 \\
             --subset {params.subset} --threads {threads} --outdir $tmp --force \\
-            {input.reads} > {log} 2>&1
+            "${{reads[0]}}" > {log} 2>&1
         mv $tmp/*_screen.txt {output.txt}
         """
 
 
 rule report_on_alignments:
     input:
-        aln=expand("alignments/{sample}.alignments.txt", sample=SAMPLES),
+        aln=expand("alignments/{sample}.alnstats.txt", sample=SAMPLES),
+        complexity=expand("alignments/{sample}.complexity.txt", sample=SAMPLES),
         mtn=expand("alignments/{sample}.mtdna.txt", sample=SAMPLES),
         dup=expand("dedupalignments/{sample}.rmdup.txt", sample=SAMPLES),
         screen=expand("qc/fastq_screen/{sample}_screen.txt", sample=SAMPLES),
@@ -820,6 +1153,7 @@ rule assess_peaks:
             "dedupalignments/{sample}.sorted.qflt.bam.bai",
             sample=EXPERIMENT
         ),
+        samples="stats/samples.tsv",
     output:
         peakN="stats/seacr/peaks_num.txt",
         peakR="stats/seacr/peaks_reproducibility.txt",
@@ -831,7 +1165,6 @@ rule assess_peaks:
     conda:
         "envs/R.yaml"
     params:
-        samplesheet=config["samplesheet"],
         subdir="dedupalignments",
         method="SEACR",
         suffix=".peaks.stringent.bed",
@@ -846,6 +1179,7 @@ use rule assess_peaks as assess_macs_peaks with:
             "dedupalignments/{sample}.sorted.qflt.bam.bai",
             sample=EXPERIMENT
         ),
+        samples="stats/samples.tsv",
     output:
         peakN="stats/macs3/peaks_num.txt",
         peakR="stats/macs3/peaks_reproducibility.txt",
@@ -855,7 +1189,6 @@ use rule assess_peaks as assess_macs_peaks with:
     log:
         "logs/assess_macs_peaks/job.log",
     params:
-        samplesheet=config["samplesheet"],
         subdir="dedupalignments",
         method="MACS",
         suffix=MACS_SUFFIX,
@@ -967,39 +1300,218 @@ if config["gtf_file"]:
             fi
             """
 
-    rule calculate_tss_enrichment:
-        input:
-            tss="annotations/tss.bed",
-            bw=expand("alignments/{sample}_raw.bw", sample=SAMPLES),
-        output:
-            matrix="stats/tss_matrix.gz",
-            enrichment="stats/tss_enrichment.txt",
-            plot="stats/tss_enrichment.pdf",
-        log:
-            "logs/calculate_tss_enrichment/job.log",
-        conda:
-            "envs/deeptools.yaml"
-        threads: 4
-        shell:
-            """
-            computeMatrix reference-point \\
-                -S {input.bw} \\
-                -R {input.tss} \\
-                --referencePoint center \\
-                -a 2000 -b 2000 \\
-                --binSize 50 \\
-                --skipZeros \\
-                -o {output.matrix} \\
-                -p {threads}
 
-            plotProfile -m {output.matrix} \\
-                -out {output.plot} \\
-                --averageType mean \\
-                --plotTitle "TSS Enrichment Profile" \\
-                --yAxisLabel "Mean Coverage" 
+# ---------------------------------------------------------------------------
+# Enrichment over region sets: signal profile, reads in regions, peak overlap
+# ---------------------------------------------------------------------------
+OKABE_ITO = ['#E69F00', '#56B4E9', '#009E73', '#F0E442', '#0072B2', '#D55E00', '#CC79A7', '#000000']
 
-            python3 {workflow.basedir}/scripts/calculate_tss_enrichment.py {output.matrix} {output.enrichment}
-            """
+rule prepare_regions:
+    input:
+        bed=lambda w: REGION_FILES[w.region],
+        chroms=config["chromosome_file"],
+        blacklist=config["blacklist"],
+    output:
+        points="annotations/regions/{region}.points.bed",
+        merged="annotations/regions/{region}.merged.bed",
+    log:
+        "logs/prepare_regions/{region}.log",
+    conda:
+        "envs/bedtools.yaml"
+    shell:
+        """
+        tmp=$(mktemp -d annotations/regions/{wildcards.region}.XXXXXX)
+        trap 'rm -rf "$tmp"' EXIT
+        # regions on the analysed chromosomes (BED, BED.gz or narrowPeak)
+        gzip -dcf {input.bed} | awk -F'\\t' -v OFS='\\t' 'NR == FNR {{keep[$1] = 1; next}}
+            /^(#|track|browser)/ {{next}} ($1 in keep) && NF >= 3' {input.chroms} - > $tmp/regions.bed
+        if [ ! -s $tmp/regions.bed ]; then
+            echo "ERROR: no regions of {input.bed} on the chromosomes in {input.chroms}" >&2
+            exit 1
+        fi
+        # reference point: narrowPeak summit, single-base sites as given, otherwise the centre
+        awk -F'\\t' -v OFS='\\t' '{{
+            if (NF == 10 && $10 ~ /^[0-9]+$/) p = $2 + $10
+            else if ($3 - $2 == 1) p = $2
+            else p = int(($2 + $3) / 2)
+            strand = (NF >= 6 && ($6 == "+" || $6 == "-")) ? $6 : "."
+            print $1, p, p + 1, (NF >= 4 ? $4 : "region" NR), 0, strand}}' $tmp/regions.bed \\
+            | sort -k1,1 -k2,2n > {output.points}
+        # merged regions outside the blacklist, for reads-in-regions and peak overlap
+        cut -f 1-3 $tmp/regions.bed | sort -k1,1 -k2,2n | bedtools merge \\
+            | bedtools subtract -a - -b {input.blacklist} > {output.merged}
+        """
+
+rule region_profile:
+    input:
+        points="annotations/regions/{region}.points.bed",
+        bw=expand("alignments/{sample}_raw.bw", sample=SAMPLES),
+    output:
+        matrix="stats/enrichment/{region}_matrix.gz",
+        score="stats/enrichment/{region}_profile_score.txt",
+        profile="stats/enrichment/{region}_profile.pdf",
+        heatmap="stats/enrichment/{region}_heatmap.png",
+    log:
+        "logs/region_profile/{region}.log",
+    conda:
+        "envs/deeptools.yaml"
+    threads: 4
+    params:
+        labels=" ".join(SAMPLES),
+        colors=" ".join(OKABE_ITO[i % len(OKABE_ITO)] for i in range(len(SAMPLES))),
+    shell:
+        """
+        computeMatrix reference-point -S {input.bw} -R {input.points} --samplesLabel {params.labels} \\
+            --referencePoint center -a 2000 -b 2000 --binSize 50 --skipZeros \\
+            -o {output.matrix} -p {threads} 2> {log}
+        plotProfile -m {output.matrix} -out {output.profile} --averageType mean --perGroup \\
+            --colors {params.colors} --refPointLabel "{wildcards.region}" \\
+            --plotTitle "{wildcards.region}" --yAxisLabel "Mean coverage" 2>> {log}
+        plotHeatmap -m {output.matrix} -out {output.heatmap} --colorMap viridis \\
+            --refPointLabel "{wildcards.region}" --regionsLabel "{wildcards.region}" 2>> {log}
+        python3 {workflow.basedir}/scripts/calculate_profile_enrichment.py {output.matrix} {output.score} >> {log} 2>&1
+        """
+
+rule region_reads:
+    input:
+        merged="annotations/regions/{region}.merged.bed",
+        fragments=expand("bedalignments/{sample}.fragments.bed", sample=SAMPLES),
+        fai=config["reference_fai"],
+        chroms=config["chromosome_file"],
+        blacklist=config["blacklist"],
+    output:
+        "stats/enrichment/{region}_reads.txt",
+    log:
+        "logs/region_reads/{region}.log",
+    conda:
+        "envs/bedtools.yaml"
+    params:
+        names=SAMPLES,
+    shell:
+        """
+        # analysable genome: listed chromosomes minus blacklist
+        genome_bp=$(awk 'NR == FNR {{keep[$1] = 1; next}} ($1 in keep) {{s += $2}} END {{print s}}' {input.chroms} {input.fai})
+        black_bp=$(gzip -dcf {input.blacklist} | awk 'NR == FNR {{keep[$1] = 1; next}} ($1 in keep)' {input.chroms} - \\
+            | cut -f 1-3 | sort -k1,1 -k2,2n | bedtools merge | awk '{{s += $3 - $2}} END {{print s + 0}}')
+        region_bp=$(awk '{{s += $3 - $2}} END {{print s + 0}}' {input.merged})
+        names=({params.names})
+        frags=({input.fragments})
+        printf "sample\\tfragments\\tfragments_in_regions\\tregion_bp\\tgenome_bp\\n" > {output}
+        for i in "${{!frags[@]}}"; do
+            n=$(wc -l < "${{frags[$i]}}")
+            k=$(bedtools intersect -u -a "${{frags[$i]}}" -b {input.merged} | wc -l)
+            printf "%s\\t%s\\t%s\\t%s\\t%s\\n" "${{names[$i]}}" $n $k $region_bp $((genome_bp - black_bp)) >> {output}
+        done
+        """
+
+REGION_PEAK_SETS = ([f"{s}|seacr|peaks/seacr/{s}.peaks.stringent.bed" for s in EXPERIMENT]
+                    + [f"{s}|macs3|peaks/macs3/{s}{MACS_SUFFIX}" for s in EXPERIMENT]
+                    + [f"consensus:{c}|{caller}|peaks/consensus/{caller}/{c}.consensus.bed"
+                       for caller in ["seacr", "macs3"] for c in CONSENSUS_CONDITIONS])
+
+rule region_peaks:
+    input:
+        merged="annotations/regions/{region}.merged.bed",
+        peaks=[e.split("|")[2] for e in REGION_PEAK_SETS],
+        fai=config["reference_fai"],
+        chroms=config["chromosome_file"],
+        blacklist=config["blacklist"],
+    output:
+        "stats/enrichment/{region}_peaks.txt",
+    log:
+        "logs/region_peaks/{region}.log",
+    conda:
+        "envs/bedtools.yaml"
+    params:
+        sets=" ".join(f"'{e}'" for e in REGION_PEAK_SETS),  # quoted: entries contain '|'
+        shuffles=10,
+    shell:
+        """
+        # observed overlap vs. the mean of shuffled peak sets (same chromosomes, outside the blacklist)
+        tmp=$(mktemp -d stats/enrichment/{wildcards.region}.XXXXXX)
+        trap 'rm -rf "$tmp"' EXIT
+        awk -v OFS='\\t' 'NR == FNR {{keep[$1] = 1; next}} ($1 in keep) {{print $1, $2}}' {input.chroms} {input.fai} > $tmp/genome.txt
+        printf "set\\tcaller\\tpeaks\\tpeaks_in_regions\\texpected_in_regions\\n" > {output}
+        for entry in {params.sets}; do
+            IFS='|' read -r label caller path <<< "$entry"
+            cut -f 1-3 "$path" > $tmp/peaks.bed
+            n=$(wc -l < $tmp/peaks.bed)
+            if [ "$n" -eq 0 ]; then
+                printf "%s\\t%s\\t0\\tNA\\tNA\\n" "$label" "$caller" >> {output}
+                continue
+            fi
+            obs=$(bedtools intersect -u -a $tmp/peaks.bed -b {input.merged} | wc -l)
+            exp=0
+            for seed in $(seq 1 {params.shuffles}); do
+                # very wide peaks may not fit outside the blacklist: report NA instead of failing
+                if ! e=$(bedtools shuffle -i $tmp/peaks.bed -g $tmp/genome.txt -excl {input.blacklist} -chrom \\
+                        -seed $seed -maxTries 10000 | bedtools intersect -u -a - -b {input.merged} | wc -l); then
+                    exp=NA
+                    break
+                fi
+                exp=$((exp + e))
+            done
+            if [ "$exp" = NA ]; then
+                printf "%s\\t%s\\t%s\\t%s\\tNA\\n" "$label" "$caller" $n $obs >> {output}
+                continue
+            fi
+            printf "%s\\t%s\\t%s\\t%s\\t%s\\n" "$label" "$caller" $n $obs \\
+                $(awk -v e=$exp -v k={params.shuffles} 'BEGIN {{printf "%.2f", e / k}}') >> {output}
+        done 2> {log}
+        """
+
+rule region_enrichment:
+    input:
+        scores=expand("stats/enrichment/{region}_profile_score.txt", region=REGIONS),
+        reads=expand("stats/enrichment/{region}_reads.txt", region=REGIONS),
+        peaks=expand("stats/enrichment/{region}_peaks.txt", region=REGIONS),
+    output:
+        "stats/region_enrichment.txt",
+    log:
+        "logs/region_enrichment/job.log",
+    run:
+        # one row per region set and sample (plus consensus peak sets); *_vs_igg = sample / matched IgG
+        rows = []
+        for region in REGIONS:
+            score = pd.read_csv(f"stats/enrichment/{region}_profile_score.txt", sep="\t")
+            score = dict(zip(score["sample_id"], score["profile_score"]))
+            reads = pd.read_csv(f"stats/enrichment/{region}_reads.txt", sep="\t").set_index("sample")
+            peaks = pd.read_csv(f"stats/enrichment/{region}_peaks.txt", sep="\t")
+            reads["pct"] = 100 * reads["fragments_in_regions"] / reads["fragments"].where(reads["fragments"] > 0)
+            reads["genome_pct"] = 100 * reads["region_bp"] / reads["genome_bp"]
+            reads["fold"] = reads["pct"] / reads["genome_pct"]
+            def peak_cols(label):
+                out = {}
+                for caller in ["seacr", "macs3"]:
+                    hit = peaks[(peaks["set"] == label) & (peaks["caller"] == caller)]
+                    if hit.empty or pd.isna(hit["peaks_in_regions"].iloc[0]):
+                        out.update({f"{caller}_peaks_in_regions_pct": None, f"{caller}_peaks_fold": None})
+                        continue
+                    n, obs, exp = (float(hit[c].iloc[0]) for c in ["peaks", "peaks_in_regions", "expected_in_regions"])
+                    out.update({f"{caller}_peaks_in_regions_pct": round(100 * obs / n, 2),
+                                f"{caller}_peaks_fold": round(obs / exp, 2) if exp > 0 else None})
+                return out
+            def ratio(a, b):
+                return round(a / b, 2) if a is not None and b not in (None, 0) and pd.notna(a) and pd.notna(b) else None
+            for sample in SAMPLES:
+                igg = matched_control(sample)
+                prof = score.get(sample)
+                rows.append({"region": region, "sample": sample, "condition": samplesheet.loc[sample, "condition"],
+                             "matched_igg": igg or "",
+                             "profile_score": prof,
+                             "profile_score_vs_igg": ratio(prof, score.get(igg)) if igg else None,
+                             "reads_in_regions_pct": round(reads.loc[sample, "pct"], 2),
+                             "region_genome_pct": round(reads.loc[sample, "genome_pct"], 3),
+                             "reads_fold": round(reads.loc[sample, "fold"], 2),
+                             "reads_fold_vs_igg": ratio(reads.loc[sample, "fold"], reads.loc[igg, "fold"]) if igg else None,
+                             **peak_cols(sample)})
+            for condition in CONSENSUS_CONDITIONS:
+                rows.append({"region": region, "sample": "consensus", "condition": condition,
+                             **peak_cols(f"consensus:{condition}")})
+        columns = ["region", "sample", "condition", "matched_igg", "profile_score", "profile_score_vs_igg",
+                   "reads_in_regions_pct", "region_genome_pct", "reads_fold", "reads_fold_vs_igg",
+                   "seacr_peaks_in_regions_pct", "seacr_peaks_fold", "macs3_peaks_in_regions_pct", "macs3_peaks_fold"]
+        pd.DataFrame(rows, columns=columns).to_csv(output[0], sep="\t", index=False, na_rep="NA")
 
 rule generate_html_report:
     input:
@@ -1019,8 +1531,9 @@ rule generate_html_report:
         macs3_peaks=expand(f"peaks/macs3/{{sample}}{MACS_SUFFIX}", sample=EXPERIMENT),
         fragments=expand("alignments/{sample}.fraglengths.txt", sample=PE_SAMPLES),
         coverage_bins=expand("bedalignments/{sample}.bin.bed", sample=SAMPLES),
-        tss_enrichment="stats/tss_enrichment.txt" if config["gtf_file"] else [],
+        regions="stats/region_enrichment.txt",
         consensus="stats/consensus_peaks.txt",
+        samples="stats/samples.tsv",
     output:
         html_report="reports/cutntag_analysis_report.html",
     log:
@@ -1028,7 +1541,6 @@ rule generate_html_report:
     conda:
         "envs/R.yaml"
     params:
-        samplesheet=config["samplesheet"],
         outdir=config["outdir"],
         snakefile_dir=workflow.basedir,
         macs3_suffix=MACS_SUFFIX,
@@ -1036,9 +1548,10 @@ rule generate_html_report:
         "scripts/render_html_report.R"
 
 # Rule ordering to prevent conflicts when both PE and SE samples are present
-ruleorder: check_quality_pe > check_quality_se
+ruleorder: check_quality_pe > check_quality_se > check_quality_bam
 ruleorder: trim_adapters_pe > trim_adapters_se
 ruleorder: align_reads_pe > align_reads_se
+ruleorder: convert_to_binary > import_bam
 
 rule bedgraph_to_tdf:
     input:
@@ -1203,9 +1716,9 @@ rule consensus_summary:
 # ---------------------------------------------------------------------------
 rule multiqc:
     input:
-        fastqc=expand("qc/{sample}_{r}", sample=SAMPLES, r=[1, 2]),
+        fastqc=expand("qc/{unit}_{r}", unit=UNIT_LIST, r=[1, 2]),
         screen=expand("qc/fastq_screen/{sample}_screen.txt", sample=SAMPLES),
-        aln=expand("alignments/{sample}.alignments.txt", sample=SAMPLES),
+        aln=expand("alignments/units/{unit}.bowtie2.txt", unit=FASTQ_PE_UNITS + FASTQ_SE_UNITS),
         dup=expand("dedupalignments/{sample}.rmdup.txt", sample=SAMPLES),
     output:
         "reports/multiqc_report.html",

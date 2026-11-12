@@ -2,38 +2,26 @@
 
 import numpy as np
 import gzip
+import itertools
 import json
 import sys
 
 def parse_deeptools_matrix(matrix_file):
-    """Parse deepTools computeMatrix output"""
+    """Parse deepTools computeMatrix output into a numeric array (regions x samples*bins)"""
     with gzip.open(matrix_file, 'rt') as f:
-        # Parse JSON metadata from first line
-        metadata_line = f.readline().strip()
-        metadata = json.loads(metadata_line[1:])  # Remove '@' prefix
-
-        # Extract sample information
+        metadata = json.loads(f.readline().strip()[1:])  # first line: '@' + JSON
         samples = metadata['sample_labels']
-
-        # Read data lines
-        data_lines = []
-        for line in f:
-            if line.strip():
-                data_lines.append(line.strip().split('\t'))
-
-        # Extract matrix values (skip first 6 genomic coordinate columns)
-        matrix_values = []
-        for line in data_lines:
-            values = [float(x) for x in line[6:]]  # Skip chr,start,end...
-            matrix_values.append(values)
-
-        # Convert to numpy array - shape: (n_regions, n_samples * n_bins)
-        data_matrix = np.array(matrix_values)
-
+        first = f.readline()
+        if not first.strip():
+            return samples, np.empty((0, 0))
+        n_cols = len(first.rstrip('\n').split('\t'))
+        # skip the 6 region columns; loadtxt avoids building large Python lists
+        data_matrix = np.loadtxt(itertools.chain([first], f), delimiter='\t',
+                                 usecols=range(6, n_cols), ndmin=2)
     return samples, data_matrix
 
-def calculate_tss_enrichment(matrix_file, output_file):
-    """Calculate TSS enrichment scores"""
+def calculate_profile_enrichment(matrix_file, output_file):
+    """Signal at the reference points relative to flanks (TSS-style enrichment score)"""
     samples, data = parse_deeptools_matrix(matrix_file)
 
     if len(samples) == 0:
@@ -54,7 +42,7 @@ def calculate_tss_enrichment(matrix_file, output_file):
 
     # Validate matrix dimensions
     if n_bins < 50:
-        raise ValueError(f"Matrix has too few bins ({n_bins}). Expected at least 50 bins for TSS enrichment calculation.")
+        raise ValueError(f"Matrix has too few bins ({n_bins}). Expected at least 50 bins for the enrichment score.")
 
     enrichments = []
 
@@ -102,16 +90,16 @@ def calculate_tss_enrichment(matrix_file, output_file):
 
     # Write results
     with open(output_file, 'w') as f:
-        f.write('sample_id\tTSS_Enrichment\n')
+        f.write('sample_id\tprofile_score\n')
         for sample, enrichment in enrichments:
             f.write(f'{sample}\t{enrichment:.3f}\n')
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        print("Usage: python calculate_tss_enrichment.py <matrix_file> <output_file>")
+        print("Usage: python calculate_profile_enrichment.py <matrix_file> <output_file>")
         sys.exit(1)
 
     matrix_file = sys.argv[1]
     output_file = sys.argv[2]
 
-    calculate_tss_enrichment(matrix_file, output_file)
+    calculate_profile_enrichment(matrix_file, output_file)

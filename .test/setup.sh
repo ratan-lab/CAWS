@@ -8,7 +8,7 @@ set -euo pipefail
 TEST=$(cd "$(dirname "$0")" && pwd)
 DATA=$TEST/data
 RUN=$TEST/run
-mkdir -p "$RUN/ref" "$RUN/out"
+mkdir -p "$RUN/ref" "$RUN/out" "$RUN/fastq" "$RUN/bam"
 
 gzip -dc "$DATA/ref/genome.fa.gz" > "$RUN/ref/genome.fa"
 samtools faidx "$RUN/ref/genome.fa"
@@ -16,11 +16,32 @@ bowtie2-build -q --threads 2 "$RUN/ref/genome.fa" "$RUN/ref/genome"
 bowtie2-build -q "$DATA/ref/ecoli.fa.gz" "$RUN/ref/ecoli"
 
 F=$DATA/fastq
+
+# K27me3_rep1 as two sequencing runs of one library (technical replicates, merged by CAWS)
+lines=$(gzip -dc "$F/K27me3_rep1_R1.fq.gz" | wc -l)
+half=$(( lines / 8 * 4 ))
+for r in R1 R2; do
+    gzip -dc "$F/K27me3_rep1_$r.fq.gz" | head -n "$half" | gzip > "$RUN/fastq/K27me3_rep1_runA_$r.fq.gz"
+    gzip -dc "$F/K27me3_rep1_$r.fq.gz" | tail -n +"$(( half + 1 ))" | gzip > "$RUN/fastq/K27me3_rep1_runB_$r.fq.gz"
+done
+
+# K27me3_rep2 as BAM input, aligned with different settings than CAWS uses (unsorted)
+bowtie2 --end-to-end --very-sensitive --no-mixed --no-discordant -X 700 -p 2 -x "$RUN/ref/genome" \
+    -1 "$F/K27me3_rep2_R1.fq.gz" -2 "$F/K27me3_rep2_R2.fq.gz" 2> "$RUN/bam/K27me3_rep2.bowtie2.txt" \
+    | samtools view -b -o "$RUN/bam/K27me3_rep2.bam" -
+
+# a user-supplied region set for enrichment: gene bodies from the test GTF
+gzip -dc "$DATA/ref/genes.gtf.gz" | awk -F'\t' -v OFS='\t' '$3 == "gene" {
+    match($9, /gene_id "[^"]+"/); id = substr($9, RSTART + 9, RLENGTH - 10)
+    print $1, $4 - 1, $5, id, 0, $7}' > "$RUN/ref/gene_bodies.bed"
+
 {
+    # K27me3_rep1: two runs (technical replicates); K27me3_rep2: BAM input
     # dedup column: K27me3_rep2 overrides the default ("controls") to exercise per-sample deduplication
     printf "sampleID\tcondition\tgroup\tread1\tread2\tdedup\n"
-    printf "K27me3_rep1\tH3K27me3\tPE\t%s\t%s\t\n" "$F/K27me3_rep1_R1.fq.gz" "$F/K27me3_rep1_R2.fq.gz"
-    printf "K27me3_rep2\tH3K27me3\tPE\t%s\t%s\tyes\n" "$F/K27me3_rep2_R1.fq.gz" "$F/K27me3_rep2_R2.fq.gz"
+    printf "K27me3_rep1\tH3K27me3\tPE\t%s\t%s\t\n" "$RUN/fastq/K27me3_rep1_runA_R1.fq.gz" "$RUN/fastq/K27me3_rep1_runA_R2.fq.gz"
+    printf "K27me3_rep1\tH3K27me3\tPE\t%s\t%s\t\n" "$RUN/fastq/K27me3_rep1_runB_R1.fq.gz" "$RUN/fastq/K27me3_rep1_runB_R2.fq.gz"
+    printf "K27me3_rep2\tH3K27me3\tPE\t%s\t\tyes\n" "$RUN/bam/K27me3_rep2.bam"
     printf "IgG_PE\tControl\tPE\t%s\t%s\t\n" "$F/IgG_R1.fq.gz" "$F/IgG_R2.fq.gz"
     printf "K27me3_SE\tH3K27me3\tSE\t%s\t-\t\n" "$F/K27me3_SE_R1.fq.gz"
     printf "IgG_SE\tControl\tSE\t%s\t-\t\n" "$F/IgG_R1.fq.gz"
@@ -52,6 +73,9 @@ cat > "$RUN/config.json" <<EOF
     "macs3_broad": false,
     "macs3_broad_cutoff": 0.1,
     "consensus_min_replicates": 2,
+    "enrichment_regions": {
+        "GeneBodies": "$RUN/ref/gene_bodies.bed"
+    },
     "heatmap_window": 3000,
     "gtf_file": "$DATA/ref/genes.gtf.gz",
     "igv_genome": "$DATA/ref/genome.chrom.sizes",

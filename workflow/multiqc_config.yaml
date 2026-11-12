@@ -3,7 +3,7 @@ title: "CAWS quality control"
 subtitle: "Read, trimming, alignment, duplication and contamination metrics"
 # strip CAWS file name parts so all tools report the same sample names
 extra_fn_clean_exts:
-  - ".alignments"
+  - ".bowtie2"
   - ".rmdup"
   - ".sorted"
   - "_screen"

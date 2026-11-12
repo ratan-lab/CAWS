@@ -24,6 +24,7 @@
     "macs3_broad": false,
     "macs3_broad_cutoff": 0.1,
     "consensus_min_replicates": 2,
+    "enrichment_regions": {},
     "heatmap_window": 3000,
     "gtf_file": "",
     "igv_genome": "hg38",

@@ -2,28 +2,37 @@
 
 library(tidyverse)
 
-df1 = tibble()
-for (absname in snakemake@input[["aln"]]) {
-    filename = strsplit(absname, "/")[[1]][2]
-    samplename = strsplit(filename, ".alignments.txt")[[1]][1]
-   
-    data = read.table(absname, fill=NA, header=FALSE)
-    res = tibble(Sample=samplename, 
-                 SequencingDepth=as.numeric(data$V1[1]), 
-                 MappedFragNum=as.numeric(data$V1[4]) + as.numeric(data$V1[5]),
-                 UniqueMappedFragNum=as.numeric(data$V1[4]),
-                 AlignmentRate=data$V1[6],
-                 UniqueAlignmentRate=paste0(round(UniqueMappedFragNum*100.0/SequencingDepth,2), "%"))
-    df1 = bind_rows(df1, res)
-}
+sample_of <- \(f, ext) str_remove(basename(f), fixed(ext))
 
-mt = c()
-for (absname in snakemake@input[["mtn"]]) {
-    num = scan(absname)
-    mt = c(mt, num)
-}
-df1$MtNumReads = mt
-df1 = df1 |> mutate(MtAlignmentRate = round(MtNumReads*100.0/SequencingDepth,2)) |> mutate(MtAlignmentRate = paste0(MtAlignmentRate, "%")) 
+# Alignment statistics from the raw (merged) BAM: total, mapped, unique, unaligned fragments
+df1 <- snakemake@input[["aln"]] |>
+    map_dfr(\(f) read_tsv(f, col_names = c("key", "value"), show_col_types = FALSE) |>
+        deframe() |> as.list() |> as_tibble() |>
+        mutate(Sample = sample_of(f, ".alnstats.txt"))) |>
+    transmute(Sample,
+              SequencingDepth = total,
+              MappedFragNum = mapped,
+              UniqueMappedFragNum = unique,
+              AlignmentRate = paste0(round(mapped * 100.0 / total, 2), "%"),
+              UniqueAlignmentRate = paste0(round(unique * 100.0 / total, 2), "%"),
+              UnalignedFragNum = unaligned)
+
+mt <- snakemake@input[["mtn"]] |>
+    map_dfr(\(f) tibble(Sample = sample_of(f, ".mtdna.txt"), MtNumReads = scan(f, quiet = TRUE)))
+df1 <- df1 |>
+    left_join(mt, by = "Sample") |>
+    mutate(MtAlignmentRate = paste0(round(MtNumReads * 100.0 / SequencingDepth, 2), "%"),
+           .after = UniqueAlignmentRate) |>
+    relocate(MtNumReads, .before = MtAlignmentRate)
+
+# ENCODE library complexity; PCR bottleneck graded by PBC1 (ENCODE thresholds)
+complexity <- snakemake@input[["complexity"]] |>
+    map_dfr(\(f) read_tsv(f, col_types = "ddd", na = "NA") |> mutate(Sample = sample_of(f, ".complexity.txt"))) |>
+    mutate(PCRBottleneck = case_when(is.na(PBC1) ~ NA_character_,
+                                     PBC1 < 0.5 ~ "severe",
+                                     PBC1 < 0.8 ~ "moderate",
+                                     PBC1 < 0.9 ~ "mild",
+                                     TRUE ~ "none"))
 
 df2 = tibble()
 for (absname in snakemake@input[["dup"]]) {
@@ -58,7 +67,11 @@ dedup_samples <- unlist(snakemake@params[["dedup_samples"]])
 df2 <- df2 |>
     mutate(Deduplicated = if_else(Sample %in% dedup_samples, "yes", "no"), .after = DuplicationRate)
 
-result <- left_join(df1, df2, by=c("Sample"="Sample")) |>
-          left_join(df3, by=c("Sample"="Sample"))
+result <- df1 |>
+    select(-UnalignedFragNum) |>
+    left_join(df2, by = "Sample") |>
+    left_join(complexity, by = "Sample") |>
+    left_join(df1 |> select(Sample, UnalignedFragNum), by = "Sample") |>
+    left_join(df3, by = "Sample")
 
 write_tsv(result, file=snakemake@output[[1]])

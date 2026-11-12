@@ -102,7 +102,7 @@ set-resources:
     mem_mb: 12000
     runtime: 180
 
-  calculate_tss_enrichment:
+  region_profile:
     threads: 4
     mem_mb: 12000
     runtime: 180
@@ -131,6 +131,26 @@ set-resources:
     threads: 1
     mem_mb: 8000
     runtime: 60
+
+  region_reads:
+    threads: 1
+    mem_mb: 12000
+    runtime: 240
+
+  region_peaks:
+    threads: 1
+    mem_mb: 8000
+    runtime: 120
+
+  library_complexity:
+    threads: 1
+    mem_mb: 8000
+    runtime: 120
+
+  merge_units:
+    threads: 2
+    mem_mb: 8000
+    runtime: 120
 
 # SLURM executor plugin configuration
 slurm-status-command: sacct  # Force sacct instead of squeue for job status

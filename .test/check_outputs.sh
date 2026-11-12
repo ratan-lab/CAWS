@@ -19,7 +19,17 @@ for s in K27me3_rep1 K27me3_rep2; do
     check "$s MACS3 peaks >= 10" '[ $(wc -l < "$OUT/peaks/macs3/${s}_peaks.narrowPeak") -ge 10 ]'
 done
 check "K27me3_SE MACS3 peaks >= 1" '[ -s "$OUT/peaks/macs3/K27me3_SE_peaks.narrowPeak" ]'
-check "TSS enrichment for 5 samples" '[ $(tail -n +2 "$OUT/stats/tss_enrichment.txt" | wc -l) -eq 5 ]'
+for region in TSS GeneBodies; do
+    check "$region enrichment for 5 samples" \
+        '[ $(awk -F"\t" -v r=$region "\$1 == r && \$2 != \"consensus\" && \$5 != \"NA\" && \$9 != \"NA\"" "$OUT/stats/region_enrichment.txt" | wc -l) -eq 5 ]'
+    check "$region consensus peak overlap reported" \
+        'awk -F"\t" -v r=$region "\$1 == r && \$2 == \"consensus\"" "$OUT/stats/region_enrichment.txt" | grep -q .'
+done
+check "technical replicates merged (K27me3_rep1: 2 runs)" \
+    'awk -F"\t" "\$1 == \"K27me3_rep1\" && \$5 == 2" "$OUT/stats/samples.tsv" | grep -q .'
+check "BAM input used (K27me3_rep2)" 'awk -F"\t" "\$1 == \"K27me3_rep2\" && \$4 == \"BAM\"" "$OUT/stats/samples.tsv" | grep -q .'
+check "library complexity (PBC1) for 5 samples" \
+    '[ $(awk -F"\t" "NR == 1 {for (i = 1; i <= NF; i++) if (\$i == \"PBC1\") c = i; next} \$c != \"NA\"" "$OUT/stats/stats.txt" | wc -l) -eq 5 ]'
 for s in K27me3_rep1 K27me3_rep2 IgG_PE K27me3_SE IgG_SE; do
     check "$s TDF exists" '[ -s "$OUT/tdf/$s.tdf" ]'
 done

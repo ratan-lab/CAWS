@@ -55,12 +55,12 @@ All other tools, including R and its packages, are installed automatically by Sn
 - **OS**: Linux (x86-64); HPC cluster execution recommended. macOS and Windows are not supported because several conda environments pin Linux (linux-64) builds.  
 
 ### Input Data Requirements
-- **FASTQ** files (gzipped) — supports both **single-end** and **paired-end** sequencing data
+- **FASTQ** files (gzipped) or **BAM** alignments — **single-end**, **paired-end** or both, and several sequencing runs per library
 - Reference genome (**FASTA**, its `.fai` index, and a Bowtie2 index)
 - **Chromosome list** (plain text, one chromosome name per line) — only reads on these chromosomes are used for peak calling and coverage
 - **Blacklist** regions (**BED**)
 - **Contaminant genomes** (Bowtie2 indexes, at least one; e.g. *E. coli*)
-- **Annotation** file (**GTF**, optional, for TSS enrichment)
+- **Annotation** file (**GTF**, optional, for TSS enrichment) and other **region sets** (BED, optional) for enrichment analysis
 - **Sample metadata** (**TSV**)
 
 **Use absolute paths** in `config.json` and the samplesheet. The pipeline runs inside `outdir`, so relative paths are resolved from there, not from where you launch Snakemake.
@@ -121,6 +121,8 @@ sample4_SE	Control	group2	/path/to/sample4.fastq.gz	NA
 
 - `condition`: `Control` (exact, case-sensitive) marks IgG controls; any other value is an experimental condition. Peaks are called only for experimental samples. Samples with the same condition are treated as replicates for peak reproducibility.
 - `group`: links experimental samples to their IgG control. With `igg_control: true`, each group must contain exactly one `Control` and at least one experimental sample, and experimental samples and their control must have the same read type (both SE or both PE).
+- **Several rows with the same `sampleID`** are sequencing runs (lanes, re-sequencing) of one library, i.e. technical replicates. Each run is trimmed and aligned separately and the alignments are merged before duplicate removal, so duplicates are found across all runs and the library counts as **one** replicate. The rows must agree on `condition`, `group` and read layout. **Every distinct `sampleID` is treated as a biological replicate.**
+- **BAM input**: if `read1` ends in `.bam`, the sample is taken as aligned (leave `read2` empty), e.g. alignments made with settings you need. Single-/paired-end is detected from the BAM, which must be aligned to the configured reference (chromosome names and lengths are checked). Trimming and Bowtie2 are skipped; FastQC runs on the BAM and the contaminant screen on read 1 extracted from it. FASTQ and BAM rows can be mixed. Note that MAPQ scales differ between aligners (`minquality`), and that a BAM without unaligned reads gives a 100% alignment rate and underestimates contamination.
 - `dedup` (optional column): `yes` or `no` overrides the global `dedup` setting for that sample, e.g. to remove duplicates from a low-input library expected to be over-amplified. Leave empty (or omit the column) to use the global setting.
 
 **Single-end indicators**: Use any of these values in the `read2` column to mark a sample as single-end: `-`, `NA`, `na`, `n/a`, `null`, `none`, `nan`, `nil`, `empty`, `0`, `false`, `missing`, `absent`, `single`, or `se`.
@@ -275,21 +277,11 @@ mkdir -p cutntag_example && cd cutntag_example
 
 for run in SRR8383516 SRR8383517 SRR8754610 SRR8435051 SRR8435052 SRR8754611 SRR8754612; do
     fasterq-dump --split-files "$run"
+    gzip "${run}"_1.fastq "${run}"_2.fastq
 done
-
-# Some libraries were sequenced in two runs; combine runs per library
-combine() {  # usage: combine <sample> <run>...
-    sample=$1; shift
-    for r in 1 2; do
-        for run in "$@"; do cat "${run}_${r}.fastq"; done | gzip > "${sample}_R${r}.fastq.gz"
-    done
-}
-combine H3K4me3_rep1 SRR8383516 SRR8383517
-combine H3K4me3_rep2 SRR8754610
-combine IgG_rep1 SRR8435051 SRR8435052
-combine IgG_rep2 SRR8754611 SRR8754612
-rm SRR*.fastq
 ```
+
+Some libraries were sequenced in two runs; they are listed as two rows with the same `sampleID` in the samplesheet (Step 3), and CAWS merges them.
 
 ### Step 2: Prepare Reference Files
 
@@ -334,13 +326,16 @@ Create `samplesheet.tsv`:
 
 ```tsv
 sampleID	condition	group	read1	read2
-H3K4me3_rep1	H3K4me3	rep1	/path/to/H3K4me3_rep1_R1.fastq.gz	/path/to/H3K4me3_rep1_R2.fastq.gz
-H3K4me3_rep2	H3K4me3	rep2	/path/to/H3K4me3_rep2_R1.fastq.gz	/path/to/H3K4me3_rep2_R2.fastq.gz
-IgG_rep1	Control	rep1	/path/to/IgG_rep1_R1.fastq.gz	/path/to/IgG_rep1_R2.fastq.gz
-IgG_rep2	Control	rep2	/path/to/IgG_rep2_R1.fastq.gz	/path/to/IgG_rep2_R2.fastq.gz
+H3K4me3_rep1	H3K4me3	rep1	/path/to/SRR8383516_1.fastq.gz	/path/to/SRR8383516_2.fastq.gz
+H3K4me3_rep1	H3K4me3	rep1	/path/to/SRR8383517_1.fastq.gz	/path/to/SRR8383517_2.fastq.gz
+H3K4me3_rep2	H3K4me3	rep2	/path/to/SRR8754610_1.fastq.gz	/path/to/SRR8754610_2.fastq.gz
+IgG_rep1	Control	rep1	/path/to/SRR8435051_1.fastq.gz	/path/to/SRR8435051_2.fastq.gz
+IgG_rep1	Control	rep1	/path/to/SRR8435052_1.fastq.gz	/path/to/SRR8435052_2.fastq.gz
+IgG_rep2	Control	rep2	/path/to/SRR8754611_1.fastq.gz	/path/to/SRR8754611_2.fastq.gz
+IgG_rep2	Control	rep2	/path/to/SRR8754612_1.fastq.gz	/path/to/SRR8754612_2.fastq.gz
 ```
 
-Each H3K4me3 replicate is paired (`group`) with the IgG control from the same series in GSE124557 (same experimenter prefix, HK or SH), and the two H3K4me3 samples share a `condition`, so they are compared for reproducibility.
+Rows with the same `sampleID` are the runs of one library and are merged. Each H3K4me3 replicate is paired (`group`) with the IgG control from the same series in GSE124557 (same experimenter prefix, HK or SH), and the two H3K4me3 samples share a `condition`, so they are compared for reproducibility.
 
 **Important**: Replace `/path/to/` with absolute paths to your downloaded FASTQ files.
 
@@ -434,7 +429,7 @@ See [Output Structure](#output-structure) for the full layout. **Key Outputs**:
 **What to expect for H3K4me3** (rough guides, not thresholds enforced by the pipeline):
 - **Alignment rate**: typically >80% for good CUT&Tag libraries
 - **FRiP**: high, as H3K4me3 signal is concentrated at promoters
-- **TSS enrichment**: well above 1, and above the IgG controls
+- **TSS enrichment** (`stats/region_enrichment.txt`, region `TSS`): profile score well above 1, and above the IgG controls
 - **Fragment size**: peak at ~150–200 bp (mono-nucleosomal)
 
 ### Step 7: Explore Results
@@ -450,13 +445,15 @@ scp user@hpc:~/cutntag_example/results/reports/cutntag_analysis_report.html .
 ```
 
 The interactive report includes:
-- Per-sample peak summary (peak counts, FRiP, peak GC, TSS enrichment score)
+- Per-sample peak summary (peak counts, FRiP, peak GC, TSS profile score)
 - Alignment, duplication, mtDNA and contaminant rates
 - Fragment size distributions (paired-end samples)
 - Correlation of binned coverage between samples
 - Peak counts, FRiP, widths and between-sample peak overlap for SEACR and MACS3
 
-Peak heatmaps (`stats/seacr/*.heatmap.png`) and the TSS profile plot (`stats/tss_enrichment.pdf`) are written as separate files.
+- Enrichment over TSSs and any other region sets
+
+Peak heatmaps (`stats/seacr/*.heatmap.png`) and region profile plots and heatmaps (`stats/enrichment/`) are written as separate files.
 
 ---
 
@@ -480,7 +477,7 @@ Start from the template `config.json` in the repository. Keys marked *optional* 
 | `trim_adapters` | `true`/`false` — enable adapter trimming via Trim Galore. Also selects the Bowtie2 mode: `--local` with trimming, `--end-to-end` without |
 | `igg_control` | `true`/`false` — use IgG controls as background for peak calling (SEACR control bedgraph, MACS3 `-c`). Requires exactly one `Control` per samplesheet `group` |
 | `mt_chrom` | Name of mitochondrial chromosome (e.g., `"chrM"`) |
-| `dedup` | *Optional*, default `"controls"`: remove PCR duplicates (Picard MarkDuplicates) from IgG controls only. `true` removes them from all samples, `false` from none; the samplesheet `dedup` column overrides this per sample. See [Duplicate Removal](#duplicate-removal) |
+| `dedup` | *Optional*, default `"controls"`: remove PCR duplicates (Picard MarkDuplicates) from IgG controls only. `true` removes them from all samples, `false` from none. A mapping sets it per condition, e.g. `{"default": "controls", "BG4": true}`; the samplesheet `dedup` column overrides both per sample. See [Duplicate Removal](#duplicate-removal) |
 | `minquality` | Minimum mapping quality (MAPQ) for reads used in peak calling, FRiP, coverage correlation and TDF tracks |
 | `fragment_min`, `fragment_max` | Minimum/maximum fragment length for paired-end alignment (Bowtie2 `-I`/`-X`). Fragments longer than 1000 bp are additionally removed before peak calling |
 | `genome_size` | Genome size for MACS3 peak calling: `"hs"` (human), `"mm"` (mouse), `"ce"` (C. elegans), `"dm"` (Drosophila), or numeric value (e.g., `2.7e9`) |
@@ -490,7 +487,8 @@ Start from the template `config.json` in the repository. Keys marked *optional* 
 | `consensus_min_replicates` | *Optional*, default `2`: minimum number of replicates that must support a pooled peak for it to enter the consensus peak set (capped at the number of replicates in the condition) |
 | `heatmap_window` | Distance (bp) on each side of SEACR peak summits for the peak heatmaps |
 | `igv_genome` | Genome for IGV TDF generation and the IGV session: an igvtools genome ID (e.g., `"hg38"`, `"mm10"`) or a path to a chrom.sizes file (the session then uses `reference_fa` as the genome) |
-| `gtf_file` | Path to GTF file for TSS enrichment (optional; `""` to skip) |
+| `gtf_file` | Path to GTF file; its protein-coding TSSs become the built-in `TSS` region set (optional; `""` to skip) |
+| `enrichment_regions` | *Optional*, default `{}`: map of name → BED file (BED, BED.gz or narrowPeak) of regions to test for enrichment, e.g. `{"PQS": "/path/pqs.bed", "ATAC": "/path/atac_peaks.narrowPeak"}`. See [Region Enrichment](#region-enrichment) |
 | `outdir` | Output directory for analysis results. Snakemake runs inside this directory |
 
 **Example `config.json`:**
@@ -630,7 +628,8 @@ tail -f logs/rulename/*   # Watch specific rule logs
 - **SE/PE Compatibility Validation** – Ensures experimental samples and controls have matching sequencing types
 - **Optimized Processing** – Separate optimized workflows for SE and PE data with appropriate biological handling
 
-- **Input Validation** – Checks the samplesheet (files exist, unique IDs, one control per group, matching read types) and contaminant configuration at startup; checks that GTF chromosome names match the reference when extracting TSSs
+- **BAM Input and Multiple Runs** – Aligned BAM files can be used instead of FASTQ; several sequencing runs of a library are merged before duplicate removal
+- **Input Validation** – Checks the samplesheet (files exist, consistent rows per sample, one control per group, matching read types), BAM references, region files and the contaminant and dedup configuration at startup; checks that GTF chromosome names match the reference when extracting TSSs
 
 ### Core Pipeline
 - Adapter trimming (**Trim Galore**) and read QC (**FastQC**, on trimmed reads when trimming is enabled)
@@ -646,7 +645,8 @@ tail -f logs/rulename/*   # Watch specific rule logs
 - Coverage correlation between samples (Pearson, log2 counts in 500 bp bins; 50,000 bins sampled)
 - FRiP, peak reproducibility between replicates, and pairwise peak overlap between samples (shared / total merged peak intervals)
 - Peak width distributions (narrow/broad categories) and median peak GC content
-- TSS enrichment scores and profile (optional, with GTF)
+- Enrichment over TSSs and user-supplied region sets (e.g. PQS, ATAC peaks): signal profile, reads in regions and peak overlap vs. shuffled peaks, each relative to the matched IgG
+- Library complexity (ENCODE NRF, PBC1, PBC2) with PCR bottleneck grading
 - Signal heatmaps around SEACR peak summits (**deepTools**)
 - CPM-normalized IGV tracks (TDF; fragment coverage for paired-end, read coverage for single-end) and unfiltered bigWig tracks (used for peak heatmaps and TSS enrichment)
 - Interactive HTML dashboard (**flexdashboard**/**Plotly**) with exportable tables
@@ -665,19 +665,20 @@ tail -f logs/rulename/*   # Watch specific rule logs
 output_directory/
 ├── qc/                  # FastQC reports; fastq_screen/ contaminant screens
 ├── trimmed/             # Adapter-trimmed reads
-├── alignments/          # Bowtie2 logs, fragment lengths, mtDNA counts, bigWigs
+├── alignments/          # alignment statistics, complexity, fragment lengths, mtDNA counts, bigWigs; units/: Bowtie2 logs per run
 ├── dedupalignments/     # BAMs used downstream (deduplicated where dedup applies), Picard metrics, filtered BAMs
 ├── bedalignments/       # Raw-count bedgraphs (SEACR input) and 500 bp binned counts
 ├── peaks/
 │   ├── seacr/           # SEACR peaks
 │   ├── macs3/           # MACS3 peaks
 │   └── consensus/       # pooled peak calls and consensus peaks per condition (seacr/, macs3/)
-├── stats/               # stats.txt, peaks_consolidated.txt, consensus_peaks.txt, TSS enrichment
+├── stats/               # stats.txt, samples.tsv, peaks_consolidated.txt, consensus_peaks.txt, region_enrichment.txt
+│   ├── enrichment/      # per region set: profile plot, heatmap, matrix and the three enrichment measures
 │   ├── seacr/           # SEACR metrics, peak GC, peak heatmaps
 │   └── macs3/           # MACS3 metrics, peak GC
 ├── tdf/                 # IGV TDF coverage tracks, CPM-normalized (one per sample), igv_session.xml
 ├── reports/             # HTML report, MultiQC report, pipeline_info/ (config, samplesheet, software versions)
-├── annotations/         # GTF-based TSS data
+├── annotations/         # tss.bed; regions/: reference points and merged regions per region set
 └── logs/                # Log files
 ```
 
@@ -698,12 +699,13 @@ output_directory/
 **Report:** `reports/cutntag_analysis_report.html`  
 
 ### Dashboard Pages  
-- **Sample Details:** per-sample peak counts, FRiP and peak GC for SEACR and MACS3, plus TSS enrichment score (if a GTF is provided), and consensus peak counts per condition  
+- **Sample Details:** per-sample peak counts, FRiP and peak GC for SEACR and MACS3, plus TSS profile score (if a GTF is provided), and consensus peak counts per condition  
 - **Alignment:** alignment statistics table (including whether each sample was deduplicated) and rates (alignment, duplication, mtDNA, contaminants)  
 - **Fragment Length:** fragment size distributions (paired-end samples)  
 - **Coverage Similarity:** correlation of binned coverage between all samples  
 - **SEACR / MACS3:** peak counts, FRiP, width distributions and width categories by condition  
 - **SEACR Peaks / MACS3 Peaks:** pairwise peak overlap heatmaps (shared / total merged peak intervals)  
+- **Region Enrichment:** enrichment over TSSs and user region sets, with IgG ratios  
 
 **Interactive Features:**  
 - Plotly-based zoom/pan/hover  
@@ -718,19 +720,22 @@ A separate **MultiQC** report (`reports/multiqc_report.html`) collects the FastQ
 <details>
 <summary><b>Click to expand the definitions of the reported metrics</b></summary>
 
-**`stats/stats.txt`** (one row per sample; also the table on the report's Alignment page). A *fragment* is a read pair for paired-end samples and a read for single-end samples.
+**`stats/stats.txt`** (one row per sample; also the table on the report's Alignment page). A *fragment* is a read pair for paired-end samples and a read for single-end samples. Alignment counts are taken from the merged alignments of each sample (all runs), the same way for FASTQ and BAM input.
 
 | Column | Meaning |
 |---|---|
-| `SequencingDepth` | Fragments given to Bowtie2 (after trimming) |
-| `MappedFragNum` | Fragments aligned once or more than once (paired-end: concordant pairs only) |
-| `UniqueMappedFragNum` | Fragments aligned exactly once |
-| `AlignmentRate` | Bowtie2 overall alignment rate |
+| `SequencingDepth` | Fragments in the alignments, aligned or not (after trimming for FASTQ input) |
+| `MappedFragNum` | Aligned fragments (paired-end: properly paired) |
+| `UniqueMappedFragNum` | Aligned fragments without an alternative alignment (no `XS` tag on the read or either mate); matches Bowtie2's "aligned exactly 1 time" |
+| `AlignmentRate` | `MappedFragNum` / `SequencingDepth` |
 | `UniqueAlignmentRate` | `UniqueMappedFragNum` / `SequencingDepth` |
 | `MtNumReads`, `MtAlignmentRate` | Fragments on `mt_chrom` (counted once per fragment, before duplicate removal) and their share of `SequencingDepth`. High values usually indicate open-chromatin background rather than targeted signal |
 | `EstimatedLibrarySize` | Picard's estimate of the number of distinct molecules in the library (paired-end only; `NA` for single-end) |
 | `DuplicationRate` | Percentage of aligned fragments marked as duplicates by Picard. Calculated for every sample, whether or not duplicates are removed |
 | `Deduplicated` | Whether duplicates were removed for this sample (see [Duplicate Removal](#duplicate-removal)) |
+| `NRF`, `PBC1`, `PBC2` | ENCODE library complexity before duplicate removal, after the MAPQ and chromosome filters: NRF = distinct fragments / fragments; PBC1 = positions with exactly one fragment / distinct positions; PBC2 = positions with one / positions with two fragments. A position is a fragment's start and end (paired-end) or a read's 5′ end and strand (single-end) |
+| `PCRBottleneck` | ENCODE grading of PBC1: severe (< 0.5), moderate (0.5–0.8), mild (0.8–0.9), none (≥ 0.9) |
+| `UnalignedFragNum` | Unaligned fragments in the alignments; `0` usually means a BAM that was filtered to aligned reads, in which case alignment rate and contamination cannot be judged |
 | `UniqueFragNum` | Aligned fragments that are not duplicates, i.e. the number remaining after deduplication (for samples that are not deduplicated, the number that *would* remain) |
 | `<Genome>OnlyRate` | One column per contaminant genome: percentage of screened reads (a subsample of `contaminant_subset` read 1 sequences) that map to that genome and not to the host or any other screened genome (FastQ Screen "one genome" hits) |
 
@@ -745,7 +750,7 @@ A separate **MultiQC** report (`reports/multiqc_report.html`) collects the FastQ
 | `pct_narrow`, `pct_broad` | Percentage of peaks ≤ 500 bp and > 2000 bp |
 | `median_gc` | Median GC fraction of the peak sequences |
 
-Consensus peak statistics (`stats/consensus_peaks.txt`) are described under [Consensus Peaks](#consensus-peaks) and the TSS enrichment score under [TSS Enrichment Analysis](#tss-enrichment-analysis).
+Consensus peak statistics (`stats/consensus_peaks.txt`) are described under [Consensus Peaks](#consensus-peaks) and enrichment statistics (`stats/region_enrichment.txt`) under [Region Enrichment](#region-enrichment).
 </details>
 
 ---
@@ -759,37 +764,55 @@ By default (`dedup: "controls"`), CAWS removes PCR duplicates from IgG controls 
 
 **Why targets are not deduplicated by default.** CUT&Tag libraries are PCR-amplified, but pA-Tn5 is tethered at its target and inserts preferentially into accessible DNA nearby, so independent cells often produce fragments with identical ends. In high-quality libraries most apparent duplicates at target sites are therefore real signal, and removing them caps the signal exactly where it is strongest. This is especially true for single-end data, where a "duplicate" only needs the same start position and strand. IgG controls, in contrast, come from little DNA, have low complexity and are dominated by true PCR duplicates, which would otherwise inflate the background used for peak calling. Without unique molecular identifiers (UMIs) the two cannot be told apart, so this is a trade-off; nf-core/cutandrun uses the same default.
 
-**When to deduplicate a target sample.** Libraries made from very little material or amplified with many PCR cycles can be dominated by PCR duplicates. Signs of this are a high `DuplicationRate` together with a small `EstimatedLibrarySize` compared with other libraries of the same mark (see [QC Metrics](#qc-metrics)). For such samples, set `dedup` to `yes` in the samplesheet; set `dedup: true` in `config.json` to deduplicate all samples, or `false` to deduplicate none.
+**When to deduplicate target samples.** The default suits abundant targets such as histone marks, which are spread over the genome, amplify like the background and do not run out. Low-abundance targets and DNA/RNA structures behave differently: few tethered pA-Tn5 complexes and few target molecules give low-complexity libraries that need more PCR cycles, so most duplicates are PCR copies; structured, GC-rich target fragments (e.g. G-quadruplexes) amplify less efficiently than background fragments, so PCR over-represents the background; and when targets are scarce, Tn5 cuts the same accessible sites repeatedly.
 
-**How it works.** Picard MarkDuplicates runs on every sample, so duplication metrics are always reported. Where duplicates are removed, downstream steps use the deduplicated alignments; otherwise they use the alignments unchanged. Both are stored in `dedupalignments/`, and the `Deduplicated` column of `stats/stats.txt` records the choice for each sample. MACS3 is run with `--keep-dup all` (as in nf-core/cutandrun, ePeak and CUT&RUNTools), so it does not remove duplicates on its own and this setting alone decides how duplicates are handled.
+| Target | Suggested setting |
+|---|---|
+| Abundant histone marks (H3K27me3, H3K4me3, H3K36me3, …) | `"controls"` (default) |
+| Transcription factors, other chromatin proteins | deduplicate (`true` for the condition) |
+| DNA/RNA structures (BG4, S9.6, Z-DNA antibodies, …) | deduplicate (`true` for the condition) |
+| Any low-input or heavily amplified library | deduplicate that sample (samplesheet `dedup` = `yes`) |
+
+The library complexity metrics help decide: a PBC1 below 0.8 (moderate or severe PCR bottleneck), a low NRF, or a high `DuplicationRate` with a small `EstimatedLibrarySize` compared with other libraries of the same mark indicate a library dominated by PCR duplicates (see [QC Metrics](#qc-metrics)). For abundant marks, real Tn5 "duplicates" also lower these values somewhat, which is why CAWS reports them rather than deciding automatically.
+
+**Configuration.** `dedup` in `config.json` is `"controls"`, `true` or `false`, or a mapping per condition, e.g.
+
+```json
+"dedup": {"default": "controls", "BG4": true, "S9.6": true}
+```
+
+The samplesheet `dedup` column (`yes`/`no`) overrides the condition setting for a sample, which overrides the default. CAWS warns at startup when replicates of one condition are treated differently, because their consensus peaks then pool deduplicated and non-deduplicated data.
+
+**How it works.** The runs of a sample are merged first, so duplicates are found across all sequencing of a library. Picard MarkDuplicates runs on every sample, so duplication metrics are always reported. Where duplicates are removed, downstream steps use the deduplicated alignments; otherwise they use the alignments unchanged. Both are stored in `dedupalignments/`, and the `Deduplicated` column of `stats/stats.txt` records the choice for each sample. MACS3 is run with `--keep-dup all` (as in nf-core/cutandrun, ePeak and CUT&RUNTools), so it does not remove duplicates on its own and this setting alone decides how duplicates are handled.
 </details>
 
 ---
 
-## TSS Enrichment Analysis  
+## Region Enrichment
 
 <details>
 <summary><b>Click to expand details</b></summary>
 
-Enable by specifying a GTF file in your configuration:
+CAWS measures enrichment of every sample over region sets: the transcription start sites of protein-coding genes (region set `TSS`, when `gtf_file` is set; GENCODE `gene_type` or Ensembl `gene_biotype`) and any BED files listed in `enrichment_regions`, for example predicted G-quadruplex sites (PQS) for BG4, or ATAC-seq peaks of the same cell line to ask whether peaks of a protein lie in open chromatin.
 
 ```json
-"gtf_file": "/path/to/genes.gtf"
+"enrichment_regions": {"PQS": "/path/to/pqs.bed", "ATAC_K562": "/path/to/K562_atac.narrowPeak"}
 ```
 
-**Features:**  
-- Extracts TSS sites of protein-coding genes from GTF (`.gtf` or `.gtf.gz`; GENCODE `gene_type` or Ensembl `gene_biotype`). Chromosome names must match the reference.  
-- Computes signal ±2 kb around each TSS in 50 bp bins (deepTools `computeMatrix`)  
-- Score: mean signal within ±400 bp of the TSS divided by mean signal in flanks 1.25–1.75 kb away, averaged over TSSs  
-- Adds the score to the dashboard's sample table  
+Region files can be BED, BED.gz or narrowPeak; only regions on the chromosomes in `chromosome_file` are used, and chromosome names must match the reference. Each region has a **reference point**: the summit for narrowPeak files, the site itself for single-base regions (such as TSSs, strand-aware), and the centre otherwise.
 
-**Outputs:**  
-- `annotations/tss.bed` — Extracted TSS coordinates  
-- `stats/tss_enrichment.txt` — Per-sample enrichment scores  
-- `stats/tss_enrichment.pdf` — TSS profile plot  
-- `stats/tss_matrix.gz` — deepTools matrix  
+**Three measures, for every sample including the IgG controls:**
+1. **Signal profile** – signal ±2 kb around the reference points (deepTools `computeMatrix`, 50 bp bins), plotted as a profile and a heatmap. The profile score is the mean signal within ±400 bp of the reference point divided by the mean signal 1.25–1.75 kb away, averaged over regions (computed from the unfiltered bigWig tracks).
+2. **Reads in regions** – the percentage of filtered fragments overlapping the regions, divided by the percentage of the analysed genome (listed chromosomes minus blacklist) the regions cover. 1 means no enrichment.
+3. **Peak overlap** – the percentage of a sample's SEACR and MACS3 peaks, and of the consensus peaks, overlapping the regions, compared with the same peaks shuffled 10 times within their chromosomes outside the blacklist (fixed random seeds, so results are reproducible). The fold enrichment is observed / mean shuffled overlap.
 
-The score is computed from the unfiltered bigWig tracks.
+**Compare with IgG.** pA-Tn5 inserts preferentially into accessible chromatin, especially for low-abundance targets and IgG, so most CUT&Tag samples appear enriched at open-chromatin regions (ATAC peaks, promoters, many PQS). Enrichment of a sample by itself therefore does not separate binding from accessibility bias; the `*_vs_igg` columns divide each measure by that of the sample's matched IgG control (the control of its `group`). Values clearly above 1 indicate enrichment beyond the accessibility background.
+
+**Outputs:**
+- `stats/region_enrichment.txt` — one row per region set and sample (and per consensus peak set): profile score, reads-in-regions percentage and fold, peak-overlap percentage and fold for SEACR and MACS3, and the IgG ratios; also shown on the report's Region Enrichment page
+- `stats/enrichment/{region}_profile.pdf`, `_heatmap.png`, `_matrix.gz` — profile plot, heatmap and deepTools matrix
+- `stats/enrichment/{region}_profile_score.txt`, `_reads.txt`, `_peaks.txt` — the three measures in detail
+- `annotations/tss.bed`, `annotations/regions/` — TSSs, reference points and merged regions
 </details>
 
 ---

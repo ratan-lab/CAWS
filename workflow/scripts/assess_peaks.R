@@ -6,7 +6,8 @@ library(Rsamtools)
 library(viridis)
 
 
-samplesheet <- read_tsv(as.character(snakemake@params[["samplesheet"]]))
+# one row per sample: sampleID, condition, group, layout (PE/SE), ...
+samplesheet <- read_tsv(as.character(snakemake@input[["samples"]]), show_col_types = FALSE)
 folder <- as.character(snakemake@params[["subdir"]])
 method <- as.character(snakemake@params[["method"]])
 
@@ -77,7 +78,6 @@ df <- tibble(sampleID = names(peak_gr)) |>
 df |> write_tsv(as.character(snakemake@output[["peakR"]]))
 
 # FRiPs
-missing_indicators <- c("", "na", "n/a", "null", "none", "-", "nan", "nil", "empty", "0", "false", "missing", "absent", "single", "se")
 
 for (absname in as.character(snakemake@input[["peaks"]])) {
     if (file.size(absname) == 0L) next
@@ -92,8 +92,7 @@ for (absname in as.character(snakemake@input[["peaks"]])) {
 
     sample_info <- samplesheet |> filter(sampleID == sample)
     if (nrow(sample_info) == 0) stop(paste("Sample", sample, "not found in samplesheet"))
-    read2_value <- sample_info$read2[1]
-    is_paired <- !(is.na(read2_value) || trimws(tolower(as.character(read2_value))) %in% missing_indicators)
+    is_paired <- sample_info$layout[1] == "PE"
 
     flag <- if (is_paired) {
         scanBamFlag(isUnmappedQuery = FALSE, isFirstMateRead = TRUE)
