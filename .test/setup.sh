@@ -21,7 +21,7 @@ F=$DATA/fastq
 lines=$(gzip -dc "$F/K27me3_rep1_R1.fq.gz" | wc -l)
 half=$(( lines / 8 * 4 ))
 for r in R1 R2; do
-    gzip -dc "$F/K27me3_rep1_$r.fq.gz" | head -n "$half" | gzip > "$RUN/fastq/K27me3_rep1_runA_$r.fq.gz"
+    gzip -dc "$F/K27me3_rep1_$r.fq.gz" | awk -v n="$half" 'NR <= n' | gzip > "$RUN/fastq/K27me3_rep1_runA_$r.fq.gz"
     gzip -dc "$F/K27me3_rep1_$r.fq.gz" | tail -n +"$(( half + 1 ))" | gzip > "$RUN/fastq/K27me3_rep1_runB_$r.fq.gz"
 done
 
