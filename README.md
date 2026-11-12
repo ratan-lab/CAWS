@@ -457,7 +457,7 @@ The interactive report includes:
 | `minquality` | Minimum mapping quality threshold |
 | `fragment_min`, `fragment_max` | Fragment size range for alignments |
 | `genome_size` | Genome size for MACS3 peak calling: `"hs"` (human), `"mm"` (mouse), `"ce"` (C. elegans), `"dm"` (Drosophila), or numeric value (e.g., `2.7e9`) |
-| `seacr_qvalue`, `macs3_qvalue_with_control`, `macs3_qvalue_no_control` | Statistical thresholds for SEACR/MACS3 |
+| `seacr_qvalue`, `macs3_qvalue_with_control`, `macs3_qvalue_no_control` | Statistical thresholds for SEACR/MACS3. Single-end samples are called with `--nomodel --extsize 147` (Tn5 cuts lack the strand bimodality MACS3 models); paired-end samples use actual fragments (`-f BAMPE`) |
 | `heatmap_window` | Window size (bp) around peaks for heatmaps |
 | `igv_genome` | Genome identifier for IGV TDF generation (e.g., `"hg38"`, `"mm10"`) — must match an ID bundled with igvtools |
 | `gtf_file` | Path to GTF file for TSS enrichment (optional) |
@@ -824,6 +824,12 @@ ls -lh /path/to/file
 3. Ensure paths don't contain spaces or special characters
 
 </details>
+
+---
+
+## Use of AI Assistance
+
+Since January 2026, development of CAWS has been assisted by generative AI tools, primarily Claude Code (Anthropic). AI assistance has been used for writing and modifying workflow code, scripts, and documentation. The architecture of the pipeline, the choice of tools and methods, and the overall design of the system are the result of decisions made by the human developers. All AI-assisted changes are reviewed by a human developer before being committed, and are checked by running the workflow (including dry runs and tests on small datasets) before release.
 
 ---
 

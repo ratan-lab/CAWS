@@ -30,13 +30,15 @@ for (absname in snakemake@input[["dup"]]) {
     filename = strsplit(absname, "/")[[1]][2]
     samplename = strsplit(filename, ".rmdup.txt")[[1]][1]
    
-    data = read.table(absname, nrows=1, header=TRUE) 
-    res = tibble(Sample=samplename, 
+    # tab-separated: ESTIMATED_LIBRARY_SIZE is empty for single-end data
+    data = read.table(absname, nrows=1, header=TRUE, sep="\t")
+    res = tibble(Sample=samplename,
               DuplicationFrac=as.numeric(data$PERCENT_DUPLICATION),
               EstimatedLibrarySize=as.numeric(data$ESTIMATED_LIBRARY_SIZE)) |>
           mutate(DuplicationRate = round(DuplicationFrac * 100, 2)) |>
           mutate(DuplicationRate = paste0(DuplicationRate,"%")) |>
-          mutate(UniqueFragNum=round(as.numeric(data$READ_PAIRS_EXAMINED) * (1 - DuplicationFrac))) |>
+          mutate(UniqueFragNum = data$READ_PAIRS_EXAMINED + data$UNPAIRED_READS_EXAMINED -
+                                 data$READ_PAIR_DUPLICATES - data$UNPAIRED_READ_DUPLICATES) |>
           select(-DuplicationFrac)
     df2 = bind_rows(df2, res)
 }

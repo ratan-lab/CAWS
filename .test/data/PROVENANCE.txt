@@ -1,0 +1,12 @@
+CAWS test dataset
+Source: Kaya-Okur et al. 2019, GEO GSE124557 (K562); built 2026-11-11 with build_test_data.sh
+Window: chr22:16500000-20500000 (hg38); host reference = chr22 masked outside the window, plus chrM
+Kept: all proper pairs fully inside the window, plus chrM, hg38-unaligned and E. coli
+pairs sampled at fraction = window pairs / genome-wide proper pairs, with at least
+200 pairs per category (gawk srand(42))
+
+sample	runs	genome_wide_pairs	window_pairs	pairs_kept
+K27me3_rep1	SRR8383510 SRR8383511	7609539	56717	63720
+K27me3_rep2	SRR8435047	5575662	45800	50647
+IgG	SRR8435051 SRR8435052	2486570	10488	16964
+K27me3_SE	SRR8754597	2130523	12753	15524

@@ -20,7 +20,6 @@ stopifnot(is.na(suffix) == FALSE)
 
 peakN = tibble()
 peakW = tibble()
-peakO = tibble()
 peakF = tibble()
 
 for (absname in as.character(snakemake@input[["peaks"]])) {
@@ -61,42 +60,25 @@ peakW_stats <- df |>
 write_tsv(peakW_stats, as.character(snakemake@output[["peakW"]]))
 
 
-for (absname1 in as.character(snakemake@input[["peaks"]])) {
-    if (file.size(absname1) == 0L) next
-    for (absname2 in as.character(snakemake@input[["peaks"]])) {
-        if (absname1 == absname2) next
-        if (file.size(absname2) == 0L) next
+# Reproducibility: peaks of each sample that overlap a peak in any other
+# replicate of the same condition (one row per sample)
+peak_files <- as.character(snakemake@input[["peaks"]])
+peak_files <- peak_files[file.size(peak_files) > 0L]
+peak_gr <- peak_files |>
+    set_names(\(f) str_remove(basename(f), fixed(suffix))) |>
+    map(\(f) read.table(f, header = FALSE, fill = TRUE) |> filter(V3 > V2) |>
+        with(GRanges(V1, IRanges(start = V2, end = V3), strand = "*")))
+cond <- samplesheet |> select(sampleID, condition) |> deframe()
 
-        filename1 = basename(absname1)
-        filename2 = basename(absname2)
-
-        sample1 = str_split(filename1, fixed(suffix))[[1]][1]
-        sample2 = str_split(filename2, fixed(suffix))[[1]][1]
-
-        peakInfo1 = read.table(absname1, header = FALSE, fill = TRUE)  
-        peakInfo2 = read.table(absname2, header = FALSE, fill = TRUE)  
-    
-        peakInfo1.gr = GRanges(peakInfo1$V1, IRanges(start = peakInfo1$V2, end = peakInfo1$V3), strand = "*")
-        peakInfo2.gr = GRanges(peakInfo2$V1, IRanges(start = peakInfo2$V2, end = peakInfo2$V3), strand = "*")
-        overlap.gr = peakInfo1.gr[unique(findOverlaps(peakInfo1.gr, peakInfo2.gr)@from)]
-
-        peakO = tibble(sample1=sample1, sample2=sample2, overlap=length(overlap.gr)) |> bind_rows(peakO)
-    }
-}
-
-df <- left_join(peakO, samplesheet, by=c("sample1"="sampleID")) |>
-      select(sample1, condition, sample2, overlap) |>
-      dplyr::rename("condition1"="condition") |>
-      left_join(samplesheet, by=c("sample2"="sampleID")) |>
-      select(sample1, condition1, sample2, condition, overlap) |>
-      dplyr::filter(condition1 == condition) |>
-      select(sample1, condition, overlap) |>
-      left_join(peakN, by=c("sample1"="sampleID")) |>
-      select(sample1, condition, overlap, peakN) |>
-      mutate(peakReprodRate = round(overlap * 100.0 / peakN, 2)) |>
-      select(sample1, condition, peakN, overlap, peakReprodRate) |>
-      dplyr::rename("sampleID"="sample1") |>
-      dplyr::rename("peakReprodNum"="overlap")
+df <- tibble(sampleID = names(peak_gr)) |>
+      mutate(condition = cond[sampleID],
+             others = map2(sampleID, condition, \(s, c) setdiff(names(peak_gr)[cond[names(peak_gr)] == c], s))) |>
+      filter(lengths(others) > 0) |>
+      mutate(peakReprodNum = map2_int(sampleID, others, \(s, o)
+                 sum(overlapsAny(peak_gr[[s]], reduce(do.call(c, unname(peak_gr[o])))))),
+             peakN = map_int(sampleID, \(s) length(peak_gr[[s]])),
+             peakReprodRate = round(peakReprodNum * 100.0 / peakN, 2)) |>
+      select(sampleID, condition, peakN, peakReprodNum, peakReprodRate)
 df |> write_tsv(as.character(snakemake@output[["peakR"]]))
 
 # FRiPs
