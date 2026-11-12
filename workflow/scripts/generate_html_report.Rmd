@@ -690,7 +690,7 @@ process_macs3_peak_width_file <- function(file_path, file_suffix) {
   sample_id <- str_remove(basename(file_path), file_suffix)
   # narrowPeak (10 columns) or broadPeak (9 columns): only the coordinates are needed
   read_tsv(file_path, col_names = FALSE, col_select = 1:3, show_col_types = FALSE) |>
-    rename(chrom = X1, start = X2, end = X3) |>
+    dplyr::rename(chrom = X1, start = X2, end = X3) |>
     mutate(width = abs(end - start), sample_id = sample_id) |>
     select(width, sample_id)
 }
