@@ -306,7 +306,7 @@ process_coverage_files <- function(coverage_files) {
   coverage <- coverage_files |>
     set_names(\(f) str_remove(basename(f), fixed(".bin.bed"))) |>
     imap(\(f, s) fread(f, header = FALSE, col.names = c("chrom", "start", s), colClasses = list(character = 1))) |>
-    reduce(\(a, b) merge(a, b, by = c("chrom", "start"), all = TRUE)) |>
+    purrr::reduce(\(a, b) merge(a, b, by = c("chrom", "start"), all = TRUE)) |>
     as_tibble() |>
     mutate(across(-c(chrom, start), \(x) replace_na(x, 0)))
 

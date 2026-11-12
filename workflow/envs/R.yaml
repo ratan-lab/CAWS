@@ -1,21 +1,19 @@
 channels:
   - conda-forge
   - bioconda
-channel_priority: strict
 
 dependencies:
-  - r-base=4.2
+  - r-base=4.2.3
   - r-tidyverse=1.3.2
-  - r-ggpubr=0.6.0
   - r-viridis=0.6.2
-  - bioconductor-genomicranges
-  - bioconductor-rsamtools
-  - r-flexdashboard
-  - r-plotly
-  - r-dt
-  - r-rmarkdown
-  - r-htmltools
-  - r-corrplot
-  - r-fs
-  - r-glue
-  - r-scales
+  - r-data.table=1.15.4
+  - bioconductor-genomicranges=1.50.0
+  - bioconductor-rsamtools=2.14.0
+  - r-flexdashboard=0.6.2
+  - r-plotly=4.10.4
+  - r-dt=0.33
+  - r-rmarkdown=2.27
+  - r-htmltools=0.5.8.1
+  - r-fs=1.6.4
+  - r-glue=1.7.0
+  - r-scales=1.3.0

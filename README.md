@@ -21,7 +21,7 @@
 - **Comprehensive Analysis** – End-to-end workflow from raw reads to interactive visualizations
 - **Dual Peak Calling** – Generates peak calls using both SEACR and MACS3 for robust peak detection
 - **Interactive Reports** – HTML dashboards with Plotly-based visualizations
-- **Reproducible** – Per-rule conda environments, with core tools (Bowtie2, samtools, bedtools, SEACR, Picard, Trim Galore, FastQC, FastQ Screen) version-pinned
+- **Reproducible** – Per-rule conda environments with pinned tool and R package versions (`workflow/envs/`)
 
 ---
 
