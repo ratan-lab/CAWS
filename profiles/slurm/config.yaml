@@ -27,7 +27,12 @@ default-resources:
 # Rule-specific resource overrides
 set-resources:
 
-  check_quality:
+  check_quality_pe:
+    threads: 2
+    mem_mb: 4000
+    runtime: 60
+
+  check_quality_se:
     threads: 2
     mem_mb: 4000
     runtime: 60
@@ -62,7 +67,12 @@ set-resources:
     mem_mb: 12000
     runtime: 240
 
-  bam_to_bed:
+  bam_to_bed_pe:
+    threads: 2
+    mem_mb: 8000
+    runtime: 180
+
+  bam_to_bed_se:
     threads: 2
     mem_mb: 8000
     runtime: 180
@@ -82,7 +92,7 @@ set-resources:
     mem_mb: 12000
     runtime: 180
 
-  dedup_assess_peaks:
+  assess_macs_peaks:
     threads: 2
     mem_mb: 12000
     runtime: 180

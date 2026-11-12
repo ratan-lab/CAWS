@@ -416,7 +416,7 @@ rule report_on_alignments:
         dup=expand("dedupalignments/{sample}.rmdup.txt", sample=SAMPLES),
         screen=expand("qc/fastq_screen/{sample}_screen.txt", sample=SAMPLES),
     output:
-        report("stats/stats.txt", caption="report/alignment.rst"),
+        "stats/stats.txt",
     log:
         "logs/report_on_alignments/job.log",
     conda:
@@ -931,8 +931,8 @@ if config["gtf_file"]:
             tss="annotations/tss.bed",
             bw=expand("alignments/{sample}_raw.bw", sample=SAMPLES),
         output:
-            matrix=protected("stats/tss_matrix.gz"),
-            enrichment=protected("stats/tss_enrichment.txt"),
+            matrix="stats/tss_matrix.gz",
+            enrichment="stats/tss_enrichment.txt",
             plot="stats/tss_enrichment.pdf",
         log:
             "logs/calculate_tss_enrichment/job.log",

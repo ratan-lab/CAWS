@@ -5,13 +5,12 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Snakemake](https://img.shields.io/badge/snakemake-≥9.0.0-brightgreen.svg)](https://snakemake.readthedocs.io)
 [![Python](https://img.shields.io/badge/python-≥3.11-blue.svg)](https://python.org)
-[![R](https://img.shields.io/badge/R-≥4.0-blue.svg)](https://r-project.org)
 
 ---
 
 ## Overview  
 
-**CAWS (CUT&Tag Analysis Workflow System)** is a comprehensive Snakemake pipeline for analyzing CUT&Tag (Cleavage Under Targets and Tagmentation) sequencing data. CUT&Tag is an advanced epigenomic profiling method that maps protein–DNA interactions and chromatin modifications with greater sensitivity and specificity than traditional ChIP-seq approaches.  
+**CAWS (CUT&Tag Analysis Workflow System)** is a comprehensive Snakemake pipeline for analyzing CUT&Tag (Cleavage Under Targets and Tagmentation) sequencing data. CUT&Tag is an epigenomic profiling method that maps protein–DNA interactions and histone modifications in situ, with lower background and fewer cells than ChIP-seq (Kaya-Okur et al., 2019).  
 
 ---
 
@@ -22,7 +21,7 @@
 - **Comprehensive Analysis** – End-to-end workflow from raw reads to interactive visualizations
 - **Dual Peak Calling** – Generates peak calls using both SEACR and MACS3 for robust peak detection
 - **Interactive Reports** – HTML dashboards with Plotly-based visualizations
-- **Reproducible** – Conda-based environment management for consistent results
+- **Reproducible** – Per-rule conda environments, with core tools (Bowtie2, samtools, bedtools, SEACR, Picard, Trim Galore, FastQC, FastQ Screen) version-pinned
 
 ---
 
@@ -39,10 +38,11 @@ CAWS is designed for:
 ## Prerequisites
 
 ### Required Software
-- **Snakemake** ≥9.0.0 (tested with 9.8.1)
+- **Snakemake** ≥9.0.0 (CI tests the latest release; also used with 9.8.1)
 - **Conda** ≥24.7.1
 - **Python** ≥3.11 (required by Snakemake 9)
-- **R** ≥4.0
+
+All other tools, including R and its packages, are installed automatically by Snakemake into per-rule conda environments (`workflow/envs/`). `envs/snakemake-runner.yaml` provides an environment with Snakemake, the SLURM executor plugin and pandas.
 
 **Important Notes**:
 - Snakemake 9.0+ requires Conda ≥24.7.1 for environment management
@@ -52,14 +52,18 @@ CAWS is designed for:
 - **Storage**: ~50 GB free space (typical dataset)  
 - **Memory**: ≥8 GB RAM (16 GB+ recommended)  
 - **CPU**: ≥4 cores  
-- **OS**: Linux (x86-64); HPC cluster execution recommended. macOS and Windows are not supported because several tool builds used by the pipeline are Linux-only.  
+- **OS**: Linux (x86-64); HPC cluster execution recommended. macOS and Windows are not supported because several conda environments pin Linux (linux-64) builds.  
 
 ### Input Data Requirements
 - **FASTQ** files (gzipped) — supports both **single-end** and **paired-end** sequencing data
-- Reference genome (**FASTA** with Bowtie2 index)
-- **Annotation** file (**GTF**, optional for TSS enrichment)
+- Reference genome (**FASTA**, its `.fai` index, and a Bowtie2 index)
+- **Chromosome list** (plain text, one chromosome name per line) — only reads on these chromosomes are used for peak calling and coverage
 - **Blacklist** regions (**BED**)
+- **Contaminant genomes** (Bowtie2 indexes, at least one; e.g. *E. coli*)
+- **Annotation** file (**GTF**, optional, for TSS enrichment)
 - **Sample metadata** (**TSV**)
+
+**Use absolute paths** in `config.json` and the samplesheet. The pipeline runs inside `outdir`, so relative paths are resolved from there, not from where you launch Snakemake.
 
 ---
 
@@ -73,7 +77,14 @@ git clone https://github.com/ratan-lab/CAWS.git
 cd CAWS
 ```
 
-**Note**: CAWS uses conda environments managed automatically by Snakemake. No need to create a master environment.
+Create the environment that runs Snakemake (once):
+
+```bash
+conda env create -f envs/snakemake-runner.yaml
+conda activate caws-snakemake
+```
+
+The tools used by each step are installed automatically by Snakemake (`--use-conda`).
 
 ---
 
@@ -84,7 +95,7 @@ Edit `profiles/slurm/config.yaml` to set your SLURM allocation and partition:
 ```yaml
 default-resources:
   - runtime=180
-  - mem_mb=5000
+  - mem_mb=9000
   - threads=1
   - slurm_account=your-allocation-name  # e.g., ratan
   - slurm_partition=your-partition      # e.g., standard
@@ -107,6 +118,9 @@ sample2_SE	Treatment	group2	/path/to/sample2.fastq.gz	-
 sample3_PE	Control	group1	/path/to/sample3_R1.fastq.gz	/path/to/sample3_R2.fastq.gz
 sample4_SE	Control	group2	/path/to/sample4.fastq.gz	NA
 ```
+
+- `condition`: `Control` (exact, case-sensitive) marks IgG controls; any other value is an experimental condition. Peaks are called only for experimental samples. Samples with the same condition are treated as replicates for peak reproducibility.
+- `group`: links experimental samples to their IgG control. With `igg_control: true`, each group must contain exactly one `Control` and at least one experimental sample, and experimental samples and their control must have the same read type (both SE or both PE).
 
 **Single-end indicators**: Use any of these values in the `read2` column to mark a sample as single-end: `-`, `NA`, `na`, `n/a`, `null`, `none`, `nan`, `nil`, `empty`, `0`, `false`, `missing`, `absent`, `single`, or `se`.
 
@@ -141,9 +155,8 @@ cat > run_caws.sh << 'EOF'
 #SBATCH -e caws_%j.err          # Error log
 #SBATCH -J caws_pipeline        # Job name
 
-# Load required modules
-module load miniforge/24.11.3-py3.12 snakemake/9.8.1
-conda env create -f envs/snakemake-runner.yaml
+# Activate the Snakemake environment (created once with: conda env create -f envs/snakemake-runner.yaml)
+module load miniforge   # if conda is provided as a module on your cluster
 conda activate caws-snakemake
 
 # Run pipeline with profile
@@ -170,9 +183,7 @@ For more control over execution and conda environment caching:
 #SBATCH -e caws_%j.err
 #SBATCH -J caws_pipeline
 
-# Load required modules
-module load miniforge/24.11.3-py3.12 snakemake/9.8.1
-conda env create -f envs/snakemake-runner.yaml
+module load miniforge   # if conda is provided as a module on your cluster
 conda activate caws-snakemake
 
 # Run pipeline with explicit parameters
@@ -191,9 +202,7 @@ snakemake \
 
 **Interactive Execution:**
 ```bash
-# Load modules
-module load miniforge/24.11.3-py3.12 snakemake/9.8.1
-conda env create -f envs/snakemake-runner.yaml
+module load miniforge   # if conda is provided as a module on your cluster
 conda activate caws-snakemake
 
 # Run in current session (use screen or tmux recommended)
@@ -202,7 +211,7 @@ snakemake --profile profiles/slurm --configfile config.json
 
 **Notes:**
 - `--conda-prefix` caches conda environments for faster subsequent runs
-- `--jobs 100` overrides the profile setting (default: 50)
+- `--jobs` overrides the profile's limit on concurrent SLURM jobs (100)
 - `--notemp` can be added to preserve temporary files for debugging
 - Use absolute paths if running from a different directory
 
@@ -210,9 +219,7 @@ snakemake --profile profiles/slurm --configfile config.json
 
 ### 5. View Results  
 
-```bash
-reports/cutntag_analysis_report.html
-```
+Open `<outdir>/reports/cutntag_analysis_report.html` in a web browser.
 
 ---
 
@@ -232,7 +239,7 @@ snakemake -s workflow/Snakefile --configfile .test/run/config.json --use-conda -
 bash .test/check_outputs.sh
 ```
 
-Results are written to `.test/run/out/`. The first run takes longer because Snakemake creates the conda environments for each tool. The same test runs on every push through GitHub Actions (`.github/workflows/test.yml`).
+Results are written to `.test/run/out/`. The first run takes longer because Snakemake creates the conda environments for each tool. GitHub Actions (`.github/workflows/test.yml`) runs this test on every push to `main` and on pull requests, together with dry runs of all `igg_control`/`dedup` combinations.
 
 ---
 
@@ -300,8 +307,9 @@ samtools faidx hg38.fa
 wget https://github.com/Boyle-Lab/Blacklist/raw/master/lists/hg38-blacklist.v2.bed.gz
 gunzip hg38-blacklist.v2.bed.gz
 
-# Download chromosome sizes
+# List of chromosomes to analyze, one name per line (here: primary chromosomes, without chrM)
 wget https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.chrom.sizes
+cut -f1 hg38.chrom.sizes | grep -vE '_|chrM|chrEBV' > hg38.chromosomes.txt
 
 # Download GTF annotation for TSS enrichment (optional)
 # GENCODE uses UCSC-style chromosome names (chr1), matching the hg38 reference above.
@@ -325,11 +333,13 @@ Create `samplesheet.tsv`:
 
 ```tsv
 sampleID	condition	group	read1	read2
-H3K4me3_rep1	Treatment	H3K4me3	/path/to/H3K4me3_rep1_R1.fastq.gz	/path/to/H3K4me3_rep1_R2.fastq.gz
-H3K4me3_rep2	Treatment	H3K4me3	/path/to/H3K4me3_rep2_R1.fastq.gz	/path/to/H3K4me3_rep2_R2.fastq.gz
-IgG_rep1	Control	H3K4me3	/path/to/IgG_rep1_R1.fastq.gz	/path/to/IgG_rep1_R2.fastq.gz
-IgG_rep2	Control	H3K4me3	/path/to/IgG_rep2_R1.fastq.gz	/path/to/IgG_rep2_R2.fastq.gz
+H3K4me3_rep1	H3K4me3	rep1	/path/to/H3K4me3_rep1_R1.fastq.gz	/path/to/H3K4me3_rep1_R2.fastq.gz
+H3K4me3_rep2	H3K4me3	rep2	/path/to/H3K4me3_rep2_R1.fastq.gz	/path/to/H3K4me3_rep2_R2.fastq.gz
+IgG_rep1	Control	rep1	/path/to/IgG_rep1_R1.fastq.gz	/path/to/IgG_rep1_R2.fastq.gz
+IgG_rep2	Control	rep2	/path/to/IgG_rep2_R1.fastq.gz	/path/to/IgG_rep2_R2.fastq.gz
 ```
+
+Each H3K4me3 replicate is paired (`group`) with the IgG control from the same series in GSE124557 (same experimenter prefix, HK or SH), and the two H3K4me3 samples share a `condition`, so they are compared for reproducibility.
 
 **Important**: Replace `/path/to/` with absolute paths to your downloaded FASTQ files.
 
@@ -339,11 +349,11 @@ Create `config.json`:
 
 ```json
 {
-    "samplesheet": "samplesheet.tsv",
+    "samplesheet": "/path/to/samplesheet.tsv",
     "reference_fa": "/path/to/hg38.fa",
     "bt2_idx": "/path/to/hg38_index",
     "reference_fai": "/path/to/hg38.fa.fai",
-    "chromosome_file": "/path/to/hg38.chrom.sizes",
+    "chromosome_file": "/path/to/hg38.chromosomes.txt",
     "blacklist": "/path/to/hg38-blacklist.v2.bed",
     "contaminant_genomes": {
         "Ecoli": "/path/to/ecoli_index",
@@ -364,7 +374,7 @@ Create `config.json`:
     "macs3_qvalue_no_control": 0.01,
     "heatmap_window": 3000,
     "igv_genome": "hg38",
-    "outdir": "results"
+    "outdir": "/path/to/cutntag_example/results"
 }
 ```
 
@@ -400,8 +410,8 @@ cat > run_example.sh << 'EOF'
 #SBATCH -o example_%j.out
 #SBATCH -J caws_example
 
-module load miniforge
-module load snakemake/9.8.1
+module load miniforge   # if conda is provided as a module on your cluster
+conda activate caws-snakemake
 
 snakemake \
   --snakefile CAWS/workflow/Snakefile \
@@ -414,35 +424,17 @@ sbatch run_example.sh
 
 ### Step 6: Expected Results
 
-**Runtime**: Approximately 2-4 hours on HPC with 8 cores (depends on read depth)
-
-**Output Structure**:
-```
-results/
-├── fastqc/                          # Quality control reports
-├── trimmed/                         # Adapter-trimmed reads (if enabled)
-├── aligned/                         # Bowtie2 alignments (BAM files)
-├── bedgraph/                        # Coverage tracks
-├── peaks/
-│   ├── seacr/                      # SEACR peak calls
-│   └── macs3/                      # MACS3 peak calls
-├── frip/                            # Fraction of Reads in Peaks
-├── heatmaps/                        # Peak visualization heatmaps
-└── reports/
-    └── cutntag_analysis_report.html # Interactive HTML report
-```
-
-**Key Outputs**:
-1. **Peak files**: `results/peaks/seacr/H3K4me3_rep1.stringent.bed`
-2. **Coverage tracks**: `results/bedgraph/H3K4me3_rep1.bedgraph`
-3. **QC metrics**: Alignment rates, FRiP scores, TSS enrichment
+See [Output Structure](#output-structure) for the full layout. **Key Outputs**:
+1. **Peak files**: `results/peaks/seacr/H3K4me3_rep1.peaks.stringent.bed`, `results/peaks/macs3/H3K4me3_rep1_peaks.narrowPeak`
+2. **Coverage tracks**: `results/tdf/H3K4me3_rep1.tdf` (CPM-normalized, for IGV) and `results/alignments/H3K4me3_rep1_raw.bw` (unfiltered, unnormalized)
+3. **QC metrics**: `results/stats/stats.txt` (alignment, duplication, mtDNA, contaminants) and `results/stats/peaks_consolidated.txt` (peak counts, reproducibility, FRiP, widths, GC)
 4. **Final report**: `results/reports/cutntag_analysis_report.html`
 
-**Expected QC Metrics for H3K4me3**:
-- **Alignment rate**: >80% (high-quality CUT&Tag)
-- **FRiP score**: 30-60% (active histone marks typically have high FRiP)
-- **TSS enrichment**: >5 (H3K4me3 is enriched at promoters)
-- **Fragment size**: Peak at ~150-200 bp (nucleosomal)
+**What to expect for H3K4me3** (rough guides, not thresholds enforced by the pipeline):
+- **Alignment rate**: typically >80% for good CUT&Tag libraries
+- **FRiP**: high, as H3K4me3 signal is concentrated at promoters
+- **TSS enrichment**: well above 1, and above the IgG controls
+- **Fragment size**: peak at ~150–200 bp (mono-nucleosomal)
 
 ### Step 7: Explore Results
 
@@ -457,12 +449,13 @@ scp user@hpc:~/cutntag_example/results/reports/cutntag_analysis_report.html .
 ```
 
 The interactive report includes:
-- Sample QC summary table
-- Alignment statistics
-- Fragment size distributions
-- Peak calling summary
-- Heatmaps of signal at peaks
-- TSS enrichment plots
+- Per-sample peak summary (peak counts, FRiP, peak GC, TSS enrichment score)
+- Alignment, duplication, mtDNA and contaminant rates
+- Fragment size distributions (paired-end samples)
+- Correlation of binned coverage between samples
+- Peak counts, FRiP, widths and between-sample peak overlap for SEACR and MACS3
+
+Peak heatmaps (`stats/seacr/*.heatmap.png`) and the TSS profile plot (`stats/tss_enrichment.pdf`) are written as separate files.
 
 ---
 
@@ -471,34 +464,37 @@ The interactive report includes:
 <details>
 <summary><b>Click to expand configuration documentation</b></summary>
 
+All keys below must be present; start from the template `config.json` in the repository.
+
 | Parameter | Description |
 |------------|-------------|
 | `samplesheet` | Path to TSV file describing samples (columns: `sampleID`, `condition`, `group`, `read1`, `read2`) |
 | `reference_fa` | Reference genome FASTA file |
 | `bt2_idx` | Bowtie2 index prefix for the reference genome |
 | `reference_fai` | FASTA index file |
-| `chromosome_file` | List of chromosomes to include |
+| `chromosome_file` | Text file with one chromosome name per line; only reads on these chromosomes are used for peak calling, FRiP, coverage correlation and TDF tracks |
 | `blacklist` | BED file of genomic regions to exclude |
-| `contaminant_genomes` | Map of contaminant name → Bowtie2 index prefix, screened with FastQ Screen against the host genome (e.g., `{"Ecoli": "...", "Bovine": "..."}`). Names must be alphanumeric/underscore; `Host` is reserved |
-| `contaminant_subset` | Number of read 1 sequences sampled per library for FastQ Screen (default `1000000`; `0` screens all reads) |
-| `trim_adapters` | `true`/`false` — enable adapter trimming via Trim Galore |
-| `igg_control` | `true`/`false` — use IgG controls as background for peak calling |
+| `contaminant_genomes` | Map of contaminant name → Bowtie2 index prefix, screened with FastQ Screen against the host genome (e.g., `{"Ecoli": "...", "Bovine": "..."}`). Names must be valid identifiers (letters, digits, underscore; not starting with a digit); `Host` is reserved |
+| `contaminant_subset` | Number of read 1 sequences sampled per library for FastQ Screen (the template uses `1000000`; `0` screens all reads) |
+| `trim_adapters` | `true`/`false` — enable adapter trimming via Trim Galore. Also selects the Bowtie2 mode: `--local` with trimming, `--end-to-end` without |
+| `igg_control` | `true`/`false` — use IgG controls as background for peak calling (SEACR control bedgraph, MACS3 `-c`). Requires exactly one `Control` per samplesheet `group` |
 | `mt_chrom` | Name of mitochondrial chromosome (e.g., `"chrM"`) |
-| `dedup` | `true`/`false` — remove PCR duplicates before peak calling |
-| `minquality` | Minimum mapping quality threshold |
-| `fragment_min`, `fragment_max` | Fragment size range for alignments |
+| `dedup` | `true`/`false` — use deduplicated BAMs (Picard MarkDuplicates) for all downstream steps. Picard runs either way, so duplication rates are always reported |
+| `minquality` | Minimum mapping quality (MAPQ) for reads used in peak calling, FRiP, coverage correlation and TDF tracks |
+| `fragment_min`, `fragment_max` | Minimum/maximum fragment length for paired-end alignment (Bowtie2 `-I`/`-X`). Fragments longer than 1000 bp are additionally removed before peak calling |
 | `genome_size` | Genome size for MACS3 peak calling: `"hs"` (human), `"mm"` (mouse), `"ce"` (C. elegans), `"dm"` (Drosophila), or numeric value (e.g., `2.7e9`) |
-| `seacr_qvalue`, `macs3_qvalue_with_control`, `macs3_qvalue_no_control` | Statistical thresholds for SEACR/MACS3. Single-end samples are called with `--nomodel --extsize 147` (Tn5 cuts lack the strand bimodality MACS3 models); paired-end samples use actual fragments (`-f BAMPE`) |
-| `heatmap_window` | Window size (bp) around peaks for heatmaps |
-| `igv_genome` | Genome identifier for IGV TDF generation (e.g., `"hg38"`, `"mm10"`) — must match an ID bundled with igvtools |
-| `gtf_file` | Path to GTF file for TSS enrichment (optional) |
-| `outdir` | Output directory for analysis results |
+| `seacr_qvalue` | Used only when `igg_control` is `false`: SEACR's numeric threshold, i.e. the top fraction of peaks kept by total signal (e.g. `0.01` = top 1%). With IgG, SEACR uses the control bedgraph instead |
+| `macs3_qvalue_with_control`, `macs3_qvalue_no_control` | MACS3 q-value cutoffs with and without IgG control. Single-end samples are called with `--nomodel --extsize 147` (Tn5 cuts lack the strand bimodality MACS3 models); paired-end samples use actual fragments (`-f BAMPE`) |
+| `heatmap_window` | Distance (bp) on each side of SEACR peak summits for the peak heatmaps |
+| `igv_genome` | Genome for IGV TDF generation: an igvtools genome ID (e.g., `"hg38"`, `"mm10"`) or a path to a chrom.sizes file |
+| `gtf_file` | Path to GTF file for TSS enrichment (optional; `""` to skip) |
+| `outdir` | Output directory for analysis results. Snakemake runs inside this directory |
 
 **Example `config.json`:**
 
 ```json
 {
-    "samplesheet": "samplesheet.tsv",
+    "samplesheet": "/data/CAWS/samplesheet.tsv",
     "reference_fa": "/share/gatk_bundle/hg38/hs38DH.fa",
     "bt2_idx": "/share/gatk_bundle/hg38/hs38DH",
     "reference_fai": "/share/gatk_bundle/hg38/hs38DH.fa.fai",
@@ -544,17 +540,17 @@ Edit `profiles/slurm/config.yaml` to set your allocation and partition in the `d
 ```yaml
 default-resources:
   - runtime=180
-  - mem_mb=5000
+  - mem_mb=9000
   - threads=1
   - slurm_account=your-allocation-name  # e.g., ratan
   - slurm_partition=your-partition      # e.g., standard
 ```
 
-**Step 2**: Load required modules
+**Step 2**: Activate the Snakemake environment
 
 ```bash
-module load miniforge
-module load snakemake/9.8.1
+module load miniforge   # if conda is provided as a module on your cluster
+conda activate caws-snakemake
 ```
 
 **Step 3**: Execute the pipeline
@@ -584,8 +580,8 @@ snakemake \
 #SBATCH -o caws_%j.out
 #SBATCH -e caws_%j.err
 
-module load miniforge
-module load snakemake/9.8.1
+module load miniforge   # if conda is provided as a module on your cluster
+conda activate caws-snakemake
 
 snakemake \
   --profile profiles/slurm \
@@ -598,15 +594,15 @@ snakemake \
 The profile (`profiles/slurm/config.yaml`) handles:
 - Job submission to SLURM with executor plugin
 - Resource allocation per rule (memory, CPU, runtime)
-- Job monitoring and resubmission on failure
-- Concurrent job limits (default: 50, override with `--jobs`)
+- Conda environments (`use-conda`), `--rerun-incomplete` and `--keep-going`
+- Concurrent job limits (default: 100, override with `--jobs`)
 
 ### Useful Options
 
 - `--conda-prefix /path/to/envs`: Cache conda environments (recommended for repeated runs)
-- `--jobs N`: Override maximum concurrent SLURM jobs (default: 50)
+- `--jobs N`: Override maximum concurrent SLURM jobs (default: 100)
 - `--notemp`: Keep temporary files for debugging
-- `--rerun-incomplete`: Rerun incomplete jobs (useful after interruptions)
+- `--rerun-incomplete`: Rerun incomplete jobs (already enabled in profile)
 - `--dryrun` or `-n`: Preview execution without running
 - `--printshellcmds`: Show shell commands (already enabled in profile)
 
@@ -631,21 +627,25 @@ tail -f logs/rulename/*   # Watch specific rule logs
 - **SE/PE Compatibility Validation** – Ensures experimental samples and controls have matching sequencing types
 - **Optimized Processing** – Separate optimized workflows for SE and PE data with appropriate biological handling
 
-### Core Pipeline
-- Quality control (**FastQC**)
-- Adapter trimming (**Trim Galore**)
-- Alignment (**Bowtie2**)
-- Duplicate removal (**Picard**)
-- Peak calling (**SEACR** & **MACS3**)
-- Contamination screening (**FastQ Screen**: *E. coli*, bovine, or any configured genome; mtDNA fraction)
-- Fragment size & correlation analysis (PE only)
-- FRiP score and reproducibility metrics
+- **Input Validation** – Checks the samplesheet (files exist, unique IDs, one control per group, matching read types) and contaminant configuration at startup; checks that GTF chromosome names match the reference when extracting TSSs
 
-### Enhanced Analysis (v2.0)  
-- **TSS enrichment profiling**  
-- **Peak width and shape distribution**  
-- **Interactive HTML dashboards (Plotly)**  
-- **SEACR vs MACS3 method comparison**  
+### Core Pipeline
+- Adapter trimming (**Trim Galore**) and read QC (**FastQC**, on trimmed reads when trimming is enabled)
+- Alignment (**Bowtie2**; paired-end in concordant-pair mode)
+- Duplicate removal (**Picard**), with duplication rate and estimated library size (paired-end)
+- Filtering by mapping quality, chromosome list and blacklist
+- Peak calling with both **SEACR** (stringent) and **MACS3**; IgG control used by both when enabled. Paired-end samples use actual fragments (`BAMPE`); single-end samples use a fixed 147 bp extension
+- Contamination screening (**FastQ Screen**: *E. coli*, bovine, or any configured genome) and mitochondrial read fraction
+
+### QC Metrics and Visualization
+- Fragment size distributions (paired-end)
+- Coverage correlation between samples (Pearson, log2 counts in 500 bp bins; 50,000 bins sampled)
+- FRiP, peak reproducibility between replicates, and pairwise peak overlap between samples (shared / total merged peak intervals)
+- Peak width distributions (narrow/broad categories) and median peak GC content
+- TSS enrichment scores and profile (optional, with GTF)
+- Signal heatmaps around SEACR peak summits (**deepTools**)
+- CPM-normalized IGV tracks (TDF; fragment coverage for paired-end, read coverage for single-end) and unfiltered bigWig tracks (used for peak heatmaps and TSS enrichment)
+- Interactive HTML dashboard (**flexdashboard**/**Plotly**) with exportable tables
 
 ---
 
@@ -658,17 +658,17 @@ tail -f logs/rulename/*   # Watch specific rule logs
 output_directory/
 ├── qc/                  # FastQC reports; fastq_screen/ contaminant screens
 ├── trimmed/             # Adapter-trimmed reads
-├── alignments/          # Alignment stats, fragment lengths, bigwigs (raw BAMs removed when dedup=true)
+├── alignments/          # Bowtie2 logs, fragment lengths, mtDNA counts, bigWigs (raw BAMs removed when dedup=true)
 ├── dedupalignments/     # Deduplicated BAMs (quality-filtered versions preserved)
-├── bedalignments/       # BED files for peak calling
+├── bedalignments/       # Raw-count bedgraphs (SEACR input) and 500 bp binned counts
 ├── peaks/
 │   ├── seacr/           # SEACR peaks
 │   └── macs3/           # MACS3 peaks
-├── stats/
-│   ├── seacr/           # SEACR metrics
-│   └── macs3/           # MACS3 metrics
+├── stats/               # stats.txt, peaks_consolidated.txt, TSS enrichment
+│   ├── seacr/           # SEACR metrics, peak GC, peak heatmaps
+│   └── macs3/           # MACS3 metrics, peak GC
 ├── tdf/                 # IGV TDF coverage tracks, CPM-normalized (one per sample)
-├── reports/             # Interactive HTML reports
+├── reports/             # Interactive HTML report
 ├── annotations/         # GTF-based TSS data
 └── logs/                # Log files
 ```
@@ -685,16 +685,17 @@ output_directory/
 
 **Report:** `reports/cutntag_analysis_report.html`  
 
-### Dashboard Sections  
-- **Overview:** Sample summaries, alignment metrics, and FRiP scores  
-- **Peak Analysis:** Width distributions, peak counts, and statistics  
-- **Quality Control:** Fragment size profiles, reproducibility metrics, TSS enrichment  
-- **Method Comparison:** SEACR vs MACS3 correlation and overlap  
+### Dashboard Pages  
+- **Sample Details:** per-sample peak counts, FRiP and peak GC for SEACR and MACS3, plus TSS enrichment score (if a GTF is provided)  
+- **Alignment:** alignment statistics table and rates (alignment, duplication, mtDNA, contaminants)  
+- **Fragment Length:** fragment size distributions (paired-end samples)  
+- **Coverage Similarity:** correlation of binned coverage between all samples  
+- **SEACR / MACS3:** peak counts, FRiP, width distributions and width categories by condition  
+- **SEACR Peaks / MACS3 Peaks:** pairwise peak overlap heatmaps (shared / total merged peak intervals)  
 
 **Interactive Features:**  
 - Plotly-based zoom/pan/hover  
-- Sortable, searchable data tables  
-- Conditional TSS panels (shown only if GTF is provided)  
+- Sortable, searchable tables with export buttons  
 
 ---
 
@@ -711,13 +712,17 @@ Enable by specifying a GTF file in your configuration:
 
 **Features:**  
 - Extracts TSS sites of protein-coding genes from GTF (`.gtf` or `.gtf.gz`; GENCODE `gene_type` or Ensembl `gene_biotype`). Chromosome names must match the reference.  
-- Calculates enrichment ±2 kb around TSS  
-- Generates TSS enrichment plots and scores  
-- Integrates results into the dashboard  
+- Computes signal ±2 kb around each TSS in 50 bp bins (deepTools `computeMatrix`)  
+- Score: mean signal within ±400 bp of the TSS divided by mean signal in flanks 1.25–1.75 kb away, averaged over TSSs  
+- Adds the score to the dashboard's sample table  
 
 **Outputs:**  
 - `annotations/tss.bed` — Extracted TSS coordinates  
 - `stats/tss_enrichment.txt` — Per-sample enrichment scores  
+- `stats/tss_enrichment.pdf` — TSS profile plot  
+- `stats/tss_matrix.gz` — deepTools matrix  
+
+The score is computed from the unfiltered bigWig tracks.
 </details>
 
 ---
@@ -730,9 +735,9 @@ Enable by specifying a GTF file in your configuration:
 **Metrics:**  
 - Summary statistics (mean, median, quartiles)  
 - Peak categories:  
-  - Narrow ≤ 500 bp (high specificity)  
-  - Broad > 2000 bp (open chromatin regions)  
-- Comparison between SEACR and MACS3  
+  - Narrow ≤ 500 bp (typical of point-source or promoter peaks)  
+  - Broad > 2000 bp (typical of broad domains, e.g. H3K27me3)  
+- Reported for both SEACR and MACS3  
 
 **Visualizations:**  
 - Histograms and category proportions  
@@ -747,8 +752,8 @@ Enable by specifying a GTF file in your configuration:
 - **Bowtie2** — Alignment  
 - **SEACR** — CUT&RUN/CUT&Tag peak calling  
 - **MACS3** — Model-based ChIP-seq analysis  
-- **FastQC**, **Trim Galore**, **Picard**, **deepTools**  
-- **R packages** — `ggplot2`, `plotly`, `flexdashboard`  
+- **FastQC**, **Trim Galore**, **Picard**, **FastQ Screen**, **samtools**, **bedtools**, **deepTools**, **igvtools**  
+- **R packages** — `tidyverse`, `GenomicRanges`, `Rsamtools`, `plotly`, `flexdashboard`, `DT`  
 
 ---
 
@@ -809,14 +814,14 @@ set-resources:
 
 **Issue**: MACS3 produces empty peak files for some samples
 
-**Cause**: MACS3 may fail to build a model for low-quality or single-end samples
+**Cause**: No regions passed the threshold (common for low-depth or low-quality libraries), or the peak caller exited with an error
 
-**Expected Behavior**: The pipeline handles this gracefully by creating empty placeholder files. Check the logs:
+**Expected Behavior**: The pipeline continues and writes empty peak files, which are skipped in the statistics. Check the MACS3 log:
 ```bash
-cat logs/call_macs_peaks_se/sample_name.log
+cat logs/call_macs_peaks_pe/sample_name.log   # or logs/call_macs_peaks_se/
 ```
 
-If this affects many samples, consider adjusting `macs3_qvalue_no_control` in config.json to a less stringent value (e.g., 0.01 instead of 0.001).
+If this affects many samples, consider a less stringent `macs3_qvalue_with_control` / `macs3_qvalue_no_control`. SEACR failures are also tolerated (empty `peaks/seacr/*.peaks.stringent.bed`); rerun the SEACR command shown by `snakemake -p` to see its error.
 
 ### Conda Environment Creation Hangs
 
