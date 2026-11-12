@@ -31,15 +31,17 @@ jobs:
           conda create -y -n caws-setup -c conda-forge -c bioconda bowtie2=2.5.1 samtools
           conda run --no-capture-output -n caws-setup bash .test/setup.sh
 
-      - name: Dry runs (IgG control and deduplication on/off)
+      - name: Dry runs (IgG control, deduplication modes, MACS3 broad peaks)
         run: |
           for igg in True False; do
-            for dedup in True False; do
+            for dedup in True False controls; do
               echo "igg_control=$igg dedup=$dedup"
               snakemake -s workflow/Snakefile --configfile .test/run/config.json \
                 --config igg_control=$igg dedup=$dedup -n --quiet
             done
           done
+          snakemake -s workflow/Snakefile --configfile .test/run/config.json \
+            --config macs3_broad=True -n --quiet
 
       - name: Run pipeline on test data
         run: |

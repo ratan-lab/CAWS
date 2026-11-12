@@ -17,12 +17,13 @@ bowtie2-build -q "$DATA/ref/ecoli.fa.gz" "$RUN/ref/ecoli"
 
 F=$DATA/fastq
 {
-    printf "sampleID\tcondition\tgroup\tread1\tread2\n"
-    printf "K27me3_rep1\tH3K27me3\tPE\t%s\t%s\n" "$F/K27me3_rep1_R1.fq.gz" "$F/K27me3_rep1_R2.fq.gz"
-    printf "K27me3_rep2\tH3K27me3\tPE\t%s\t%s\n" "$F/K27me3_rep2_R1.fq.gz" "$F/K27me3_rep2_R2.fq.gz"
-    printf "IgG_PE\tControl\tPE\t%s\t%s\n" "$F/IgG_R1.fq.gz" "$F/IgG_R2.fq.gz"
-    printf "K27me3_SE\tH3K27me3\tSE\t%s\t-\n" "$F/K27me3_SE_R1.fq.gz"
-    printf "IgG_SE\tControl\tSE\t%s\t-\n" "$F/IgG_R1.fq.gz"
+    # dedup column: K27me3_rep2 overrides the default ("controls") to exercise per-sample deduplication
+    printf "sampleID\tcondition\tgroup\tread1\tread2\tdedup\n"
+    printf "K27me3_rep1\tH3K27me3\tPE\t%s\t%s\t\n" "$F/K27me3_rep1_R1.fq.gz" "$F/K27me3_rep1_R2.fq.gz"
+    printf "K27me3_rep2\tH3K27me3\tPE\t%s\t%s\tyes\n" "$F/K27me3_rep2_R1.fq.gz" "$F/K27me3_rep2_R2.fq.gz"
+    printf "IgG_PE\tControl\tPE\t%s\t%s\t\n" "$F/IgG_R1.fq.gz" "$F/IgG_R2.fq.gz"
+    printf "K27me3_SE\tH3K27me3\tSE\t%s\t-\t\n" "$F/K27me3_SE_R1.fq.gz"
+    printf "IgG_SE\tControl\tSE\t%s\t-\t\n" "$F/IgG_R1.fq.gz"
 } > "$RUN/samplesheet.tsv"
 
 cat > "$RUN/config.json" <<EOF
@@ -40,7 +41,7 @@ cat > "$RUN/config.json" <<EOF
     "trim_adapters": true,
     "igg_control": true,
     "mt_chrom": "chrM",
-    "dedup": true,
+    "dedup": "controls",
     "minquality": 3,
     "fragment_min": 10,
     "fragment_max": 700,
@@ -48,6 +49,9 @@ cat > "$RUN/config.json" <<EOF
     "seacr_qvalue": 0.01,
     "macs3_qvalue_with_control": 0.01,
     "macs3_qvalue_no_control": 0.001,
+    "macs3_broad": false,
+    "macs3_broad_cutoff": 0.1,
+    "consensus_min_replicates": 2,
     "heatmap_window": 3000,
     "gtf_file": "$DATA/ref/genes.gtf.gz",
     "igv_genome": "$DATA/ref/genome.chrom.sizes",

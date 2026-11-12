@@ -1,5 +1,7 @@
 from snakemake.utils import min_version
 import os
+import re
+from pathlib import Path
 import pandas as pd
 
 ##### set minimum snakemake version #####
@@ -55,6 +57,15 @@ samplesheet['is_paired'] = ~samplesheet['read2'].apply(is_missing_read2)
 # check the sample names are unique
 assert samplesheet.index.is_unique, "sampleIDs in the samplesheet are not unique"
 
+# optional settings (defaults keep older config files working)
+config.setdefault("dedup", "controls")
+config.setdefault("macs3_broad", False)
+config.setdefault("macs3_broad_cutoff", 0.1)
+config.setdefault("consensus_min_replicates", 2)
+assert config["dedup"] in (True, False, "controls"), \
+    "dedup must be true, false or \"controls\""
+assert int(config["consensus_min_replicates"]) >= 1, "consensus_min_replicates must be >= 1"
+
 # validate IgG control setup if enabled
 if config["igg_control"]:
     groups = samplesheet["group"].unique()
@@ -95,6 +106,65 @@ EXPERIMENT = samplesheet[samplesheet["condition"] != "Control"].index.tolist()
 CONTROL = samplesheet[samplesheet["condition"] == "Control"].index.tolist()
 PE_SAMPLES = get_pe_samples()
 SE_SAMPLES = get_se_samples()
+
+# Duplicate removal per sample: the optional samplesheet column "dedup" (yes/no)
+# overrides the global setting (true = all, false = none, "controls" = IgG only)
+def default_dedup(sample):
+    if config["dedup"] == "controls":
+        return sample in CONTROL
+    return bool(config["dedup"])
+
+DEDUP = {}
+for s in SAMPLES:
+    value = samplesheet.loc[s, "dedup"] if "dedup" in samplesheet.columns else None
+    value = "" if pd.isna(value) else str(value).strip().lower()
+    if value in ("", "default"):
+        DEDUP[s] = default_dedup(s)
+    elif value in ("yes", "true", "1"):
+        DEDUP[s] = True
+    elif value in ("no", "false", "0"):
+        DEDUP[s] = False
+    else:
+        raise ValueError(f"Sample {s}: dedup column must be yes, no or empty, found '{value}'")
+
+# MACS3 peak format (narrow by default, broad for broad marks)
+MACS_SUFFIX = "_peaks.broadPeak" if config["macs3_broad"] else "_peaks.narrowPeak"
+MACS_MODE = f"--broad --broad-cutoff {config['macs3_broad_cutoff']}" if config["macs3_broad"] else ""
+
+# Consensus peaks: experimental conditions with at least two replicates
+for c in samplesheet.loc[EXPERIMENT, "condition"].unique():
+    assert re.fullmatch(r"[A-Za-z0-9._-]+", c), \
+        f"condition '{c}' may only contain letters, digits, '.', '_' and '-' (it is used in file names)"
+CONDITION_SAMPLES = {c: samplesheet.index[samplesheet["condition"] == c].tolist()
+                     for c in samplesheet.loc[EXPERIMENT, "condition"].unique()}
+CONSENSUS_CONDITIONS = sorted(c for c, s in CONDITION_SAMPLES.items() if len(s) >= 2)
+
+def condition_controls(condition):
+    """IgG controls of all groups that the condition's samples belong to."""
+    if not config["igg_control"]:
+        return []
+    groups = samplesheet.loc[CONDITION_SAMPLES[condition], "group"].unique()
+    return samplesheet.index[(samplesheet["condition"] == "Control") & samplesheet["group"].isin(groups)].tolist()
+
+wildcard_constraints:
+    sample="|".join(re.escape(s) for s in SAMPLES),
+    condition="|".join(re.escape(c) for c in CONSENSUS_CONDITIONS) or "NO_CONSENSUS_CONDITIONS",
+    caller="seacr|macs3",
+
+def consensus_threshold(condition):
+    return min(int(config["consensus_min_replicates"]), len(CONDITION_SAMPLES[condition]))
+
+def replicate_peaks(caller, condition):
+    pattern = "peaks/seacr/{s}.peaks.stringent.bed" if caller == "seacr" else f"peaks/macs3/{{s}}{MACS_SUFFIX}"
+    return [pattern.format(s=s) for s in CONDITION_SAMPLES[condition]]
+
+def pooled_peaks(caller, condition):
+    if caller == "seacr":
+        return f"peaks/consensus/seacr/{condition}.pooled.stringent.bed"
+    return f"peaks/consensus/macs3/{condition}.pooled{MACS_SUFFIX}"
+
+CONSENSUS_FILES = expand("peaks/consensus/{caller}/{condition}.consensus.bed",
+                         caller=["seacr", "macs3"], condition=CONSENSUS_CONDITIONS)
 
 # Enhanced validation for mixed samplesheets
 def validate_mixed_samplesheet():
@@ -149,6 +219,10 @@ def validate_mixed_samplesheet():
     print(f"   📊 {len(PE_SAMPLES)} paired-end samples: {PE_SAMPLES}")
     print(f"   📊 {len(SE_SAMPLES)} single-end samples: {SE_SAMPLES}")
     print(f"   📈 Fragment analysis will be performed for {len(PE_SAMPLES)} paired-end samples only")
+    print(f"   🧬 Duplicates removed for: {[s for s in SAMPLES if DEDUP[s]] or 'none'}")
+    single = sorted(set(CONDITION_SAMPLES) - set(CONSENSUS_CONDITIONS))
+    if single:
+        print(f"   ℹ️  No consensus peaks for single-replicate conditions: {single}")
 
 # Run validation
 validate_mixed_samplesheet()
@@ -167,6 +241,11 @@ rule all:
         "stats/tss_enrichment.txt" if config["gtf_file"] else [],
         "reports/cutntag_analysis_report.html",
         expand("tdf/{sample}.tdf", sample=SAMPLES),
+        CONSENSUS_FILES,
+        "stats/consensus_peaks.txt",
+        "reports/multiqc_report.html",
+        "reports/pipeline_info/software_versions.tsv",
+        "tdf/igv_session.xml",
 
 
 rule check_quality_pe:
@@ -297,7 +376,7 @@ rule convert_to_binary:
         "alignments/{sample}.sam",
     output:
         # raw BAM is superseded by dedupalignments/ when dedup is enabled
-        bam=temp("alignments/{sample}.sorted.bam") if config["dedup"] else "alignments/{sample}.sorted.bam",
+        bam=temp("alignments/{sample}.sorted.bam"),
     log:
         "logs/convert_to_binary/{sample}.log",
     conda:
@@ -313,7 +392,7 @@ rule index_bam:
     input:
         bam="alignments/{sample}.sorted.bam",
     output:
-        bai=temp("alignments/{sample}.sorted.bam.bai") if config["dedup"] else "alignments/{sample}.sorted.bam.bai",
+        bai=temp("alignments/{sample}.sorted.bam.bai"),
     log:
         "logs/index_bam/{sample}.log",
     conda:
@@ -335,10 +414,18 @@ rule remove_duplicates:
         "logs/remove_duplicates/{sample}.log",
     conda:
         "envs/picard.yaml"
+    params:
+        dedup_sample=lambda w: "yes" if DEDUP[w.sample] else "no",
     shell:
         """
         mkdir -p dedupalignments
-        picard MarkDuplicates -I {input.bam} -O {output.bam} -METRICS_FILE {output.metrics} -REMOVE_DUPLICATES true
+        if [ {params.dedup_sample} = yes ]; then
+            picard MarkDuplicates -I {input.bam} -O {output.bam} -METRICS_FILE {output.metrics} -REMOVE_DUPLICATES true 2> {log}
+        else
+            # duplication metrics only; downstream steps use the alignments unchanged
+            picard MarkDuplicates -I {input.bam} -O /dev/null -METRICS_FILE {output.metrics} 2> {log}
+            cp {input.bam} {output.bam}
+        fi
         """
 
 
@@ -423,6 +510,7 @@ rule report_on_alignments:
         "envs/R.yaml"
     params:
         contaminants=list(CONTAMINANTS),
+        dedup_samples=[s for s in SAMPLES if DEDUP[s]],
     script:
         "scripts/run_alignment_report.R"
 
@@ -457,32 +545,17 @@ rule bam_to_bed_pe:
     input:
         fai=config["reference_fai"],
         blklist=config["blacklist"],
-        bai=(
-            "dedupalignments/{sample}.sorted.bam.bai"
-            if config["dedup"]
-            else "alignments/{sample}.sorted.bam.bai"
-        ),
-        bam=(
-            "dedupalignments/{sample}.sorted.bam"
-            if config["dedup"]
-            else "alignments/{sample}.sorted.bam"
-        ),
+        bai="dedupalignments/{sample}.sorted.bam.bai",
+        bam="dedupalignments/{sample}.sorted.bam",
     output:
         bam=temp("{sample}.name.bam"),
-        qbam=(
-            "dedupalignments/{sample}.sorted.qflt.bam"
-            if config["dedup"]
-            else "alignments/{sample}.sorted.qflt.bam"
-        ),
-        qbai=(
-            "dedupalignments/{sample}.sorted.qflt.bam.bai"
-            if config["dedup"]
-            else "alignments/{sample}.sorted.qflt.bam.bai"
-        ),
+        qbam="dedupalignments/{sample}.sorted.qflt.bam",
+        qbai="dedupalignments/{sample}.sorted.qflt.bam.bai",
         bed=temp("bedalignments/{sample}.bed"),
         bedgraph="bedalignments/{sample}.bedgraph",
         cpm_bedgraph=temp("bedalignments/{sample}.cpm.bedgraph"),
         binbed="bedalignments/{sample}.bin.bed",
+        fragments=temp("bedalignments/{sample}.fragments.bed"),
     wildcard_constraints:
         sample="|".join(PE_SAMPLES) if PE_SAMPLES else "NO_PE_SAMPLES"
     log:
@@ -513,6 +586,7 @@ rule bam_to_bed_pe:
         | cut -f 1,2,6 \
         | sort -k1,1 -k2,2n -k3,3n \
         > {output.bed}
+        cp {output.bed} {output.fragments}
 
         # Common processing
         bedtools genomecov -bg -i {output.bed} \
@@ -534,32 +608,17 @@ rule bam_to_bed_se:
     input:
         fai=config["reference_fai"],
         blklist=config["blacklist"],
-        bai=(
-            "dedupalignments/{sample}.sorted.bam.bai"
-            if config["dedup"]
-            else "alignments/{sample}.sorted.bam.bai"
-        ),
-        bam=(
-            "dedupalignments/{sample}.sorted.bam"
-            if config["dedup"]
-            else "alignments/{sample}.sorted.bam"
-        ),
+        bai="dedupalignments/{sample}.sorted.bam.bai",
+        bam="dedupalignments/{sample}.sorted.bam",
     output:
         bam=temp("{sample}.name.bam"),
-        qbam=(
-            "dedupalignments/{sample}.sorted.qflt.bam"
-            if config["dedup"]
-            else "alignments/{sample}.sorted.qflt.bam"
-        ),
-        qbai=(
-            "dedupalignments/{sample}.sorted.qflt.bam.bai"
-            if config["dedup"]
-            else "alignments/{sample}.sorted.qflt.bam.bai"
-        ),
+        qbam="dedupalignments/{sample}.sorted.qflt.bam",
+        qbai="dedupalignments/{sample}.sorted.qflt.bam.bai",
         bed=temp("bedalignments/{sample}.bed"),
         bedgraph="bedalignments/{sample}.bedgraph",
         cpm_bedgraph=temp("bedalignments/{sample}.cpm.bedgraph"),
         binbed="bedalignments/{sample}.bin.bed",
+        fragments=temp("bedalignments/{sample}.fragments.bed"),
     wildcard_constraints:
         sample="|".join(SE_SAMPLES) if SE_SAMPLES else "NO_SE_SAMPLES"
     log:
@@ -588,6 +647,12 @@ rule bam_to_bed_se:
         bedtools bamtobed -i {output.bam} \
         | sort -k1,1 -k2,2n -k3,3n \
         > {output.bed}
+
+        # Pseudo-fragments for pooled peak calling: reads extended to 147 bp along their strand
+        awk -v OFS="\\t" 'NR == FNR {{len[$1] = $2; next}}
+            {{if ($6 == "-") {{s = $3 - 147; e = $3}} else {{s = $2; e = $2 + 147}}
+              if (s < 0) s = 0; if (e > len[$1]) e = len[$1]; print $1, s, e}}' \
+            {input.fai} {output.bed} | sort -k1,1 -k2,2n > {output.fragments}
 
         # Common processing
         bedtools genomecov -bg -i {output.bed} \
@@ -621,7 +686,7 @@ rule calculate_seacr_peak_gc:
         """
         if [ -s {input.peaks} ]; then
             bedtools nuc -fi {input.fasta} -bed {input.peaks} | \
-            awk 'NR>1 {{print $8}}' | \
+            awk -F'\\t' 'NR==1 {{for (i = 1; i <= NF; i++) if ($i ~ /pct_gc$/) c = i; next}} {{print $c}}' | \
             sort -n | \
             awk '{{a[NR]=$1}} END {{n=NR; if(n==0) print "{wildcards.sample}", 0; else if(n%2==1) print "{wildcards.sample}", a[(n+1)/2]; else print "{wildcards.sample}", (a[n/2]+a[n/2+1])/2}}' \
             > {output.gc_stats}
@@ -632,7 +697,7 @@ rule calculate_seacr_peak_gc:
 
 rule calculate_macs_peak_gc:
     input:
-        peaks="peaks/macs3/{sample}_peaks.narrowPeak",
+        peaks=f"peaks/macs3/{{sample}}{MACS_SUFFIX}",
         fasta=config["reference_fa"],
     output:
         gc_stats="stats/macs3/{sample}_gc_content.txt",
@@ -646,7 +711,7 @@ rule calculate_macs_peak_gc:
         """
         if [ -s {input.peaks} ]; then
             bedtools nuc -fi {input.fasta} -bed {input.peaks} | \
-            awk 'NR>1 {{print $12}}' | \
+            awk -F'\\t' 'NR==1 {{for (i = 1; i <= NF; i++) if ($i ~ /pct_gc$/) c = i; next}} {{print $c}}' | \
             sort -n | \
             awk '{{a[NR]=$1}} END {{n=NR; if(n==0) print "{wildcards.sample}", 0; else if(n%2==1) print "{wildcards.sample}", a[(n+1)/2]; else print "{wildcards.sample}", (a[n/2]+a[n/2+1])/2}}' \
             > {output.gc_stats}
@@ -686,19 +751,10 @@ rule call_seacr_peaks:
 rule call_macs_peaks_pe:
     input:
         con=get_bam_control if config["igg_control"] else [],
-        exp=(
-            "dedupalignments/{sample}.sorted.qflt.bam"
-            if config["dedup"]
-            else "alignments/{sample}.sorted.qflt.bam"
-        ),
-        expi=(
-            "dedupalignments/{sample}.sorted.qflt.bam.bai"
-            if config["dedup"]
-            else "alignments/{sample}.sorted.qflt.bam.bai"
-        ),
+        exp="dedupalignments/{sample}.sorted.qflt.bam",
+        expi="dedupalignments/{sample}.sorted.qflt.bam.bai",
     output:
-        sbed="peaks/macs3/{sample}_summits.bed",
-        npeaks="peaks/macs3/{sample}_peaks.narrowPeak",
+        npeaks=f"peaks/macs3/{{sample}}{MACS_SUFFIX}",
         peaks="peaks/macs3/{sample}_peaks.xls"
     wildcard_constraints:
         sample="|".join([s for s in PE_SAMPLES if s in EXPERIMENT]) if PE_SAMPLES else "NO_PE_SAMPLES"
@@ -710,15 +766,15 @@ rule call_macs_peaks_pe:
         prefix="{sample}",
         dir="peaks/macs3",
         has_igg=config["igg_control"],
+        mode=MACS_MODE,
     shell:
         """
         if [ {params.has_igg} == True ]; then
-           macs3 callpeak -t {input.exp} -c {input.con} -f BAMPE -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} -B --SPMR -q {config[macs3_qvalue_with_control]} 2> {log} || true
+           macs3 callpeak -t {input.exp} -c {input.con} -f BAMPE -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} {params.mode} --keep-dup all -B --SPMR -q {config[macs3_qvalue_with_control]} 2> {log} || true
         else
-           macs3 callpeak -t {input.exp} -f BAMPE -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} -B --SPMR -q {config[macs3_qvalue_no_control]} --nolambda 2> {log} || true
+           macs3 callpeak -t {input.exp} -f BAMPE -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} {params.mode} --keep-dup all -B --SPMR -q {config[macs3_qvalue_no_control]} --nolambda 2> {log} || true
         fi
         if [ ! -f {output.npeaks} ]; then
-            touch {output.sbed}
             touch {output.npeaks}
             touch {output.peaks}
         fi
@@ -727,19 +783,10 @@ rule call_macs_peaks_pe:
 rule call_macs_peaks_se:
     input:
         con=get_bam_control if config["igg_control"] else [],
-        exp=(
-            "dedupalignments/{sample}.sorted.qflt.bam"
-            if config["dedup"]
-            else "alignments/{sample}.sorted.qflt.bam"
-        ),
-        expi=(
-            "dedupalignments/{sample}.sorted.qflt.bam.bai"
-            if config["dedup"]
-            else "alignments/{sample}.sorted.qflt.bam.bai"
-        ),
+        exp="dedupalignments/{sample}.sorted.qflt.bam",
+        expi="dedupalignments/{sample}.sorted.qflt.bam.bai",
     output:
-        sbed="peaks/macs3/{sample}_summits.bed",
-        npeaks="peaks/macs3/{sample}_peaks.narrowPeak",
+        npeaks=f"peaks/macs3/{{sample}}{MACS_SUFFIX}",
         peaks="peaks/macs3/{sample}_peaks.xls"
     wildcard_constraints:
         sample="|".join([s for s in SE_SAMPLES if s in EXPERIMENT]) if SE_SAMPLES else "NO_SE_SAMPLES"
@@ -751,15 +798,15 @@ rule call_macs_peaks_se:
         prefix="{sample}",
         dir="peaks/macs3",
         has_igg=config["igg_control"],
+        mode=MACS_MODE,
     shell:
         """
         if [ {params.has_igg} == True ]; then
-           macs3 callpeak -t {input.exp} -c {input.con} -f BAM --nomodel --extsize 147 -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} -B --SPMR -q {config[macs3_qvalue_with_control]} 2> {log} || true
+           macs3 callpeak -t {input.exp} -c {input.con} -f BAM --nomodel --extsize 147 -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} {params.mode} --keep-dup all -B --SPMR -q {config[macs3_qvalue_with_control]} 2> {log} || true
         else
-           macs3 callpeak -t {input.exp} -f BAM --nomodel --extsize 147 -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} -B --SPMR -q {config[macs3_qvalue_no_control]} --nolambda 2> {log} || true
+           macs3 callpeak -t {input.exp} -f BAM --nomodel --extsize 147 -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} {params.mode} --keep-dup all -B --SPMR -q {config[macs3_qvalue_no_control]} --nolambda 2> {log} || true
         fi
         if [ ! -f {output.npeaks} ]; then
-            touch {output.sbed}
             touch {output.npeaks}
             touch {output.peaks}
         fi
@@ -770,7 +817,7 @@ rule assess_peaks:
         peaks=expand("peaks/seacr/{sample}.peaks.stringent.bed", sample=EXPERIMENT),
         gc_files=expand("stats/seacr/{sample}_gc_content.txt", sample=EXPERIMENT),
         bai=expand(
-            "dedupalignments/{sample}.sorted.qflt.bam.bai" if config["dedup"] else "alignments/{sample}.sorted.qflt.bam.bai",
+            "dedupalignments/{sample}.sorted.qflt.bam.bai",
             sample=EXPERIMENT
         ),
     output:
@@ -785,17 +832,18 @@ rule assess_peaks:
         "envs/R.yaml"
     params:
         samplesheet=config["samplesheet"],
-        subdir="dedupalignments" if config["dedup"] else "alignments",
-        method="SEACR"
+        subdir="dedupalignments",
+        method="SEACR",
+        suffix=".peaks.stringent.bed",
     script:
         "scripts/assess_peaks.R"
 
 use rule assess_peaks as assess_macs_peaks with:
     input:
-        peaks=expand("peaks/macs3/{sample}_peaks.narrowPeak", sample=EXPERIMENT),
+        peaks=expand(f"peaks/macs3/{{sample}}{MACS_SUFFIX}", sample=EXPERIMENT),
         gc_files=expand("stats/macs3/{sample}_gc_content.txt", sample=EXPERIMENT),
         bai=expand(
-            "dedupalignments/{sample}.sorted.qflt.bam.bai" if config["dedup"] else "alignments/{sample}.sorted.qflt.bam.bai",
+            "dedupalignments/{sample}.sorted.qflt.bam.bai",
             sample=EXPERIMENT
         ),
     output:
@@ -808,8 +856,9 @@ use rule assess_peaks as assess_macs_peaks with:
         "logs/assess_macs_peaks/job.log",
     params:
         samplesheet=config["samplesheet"],
-        subdir="dedupalignments" if config["dedup"] else "alignments",
-        method="MACS"
+        subdir="dedupalignments",
+        method="MACS",
+        suffix=MACS_SUFFIX,
 
 rule consolidate_stats:
     input:
@@ -834,16 +883,8 @@ rule consolidate_stats:
 
 rule create_bigwig:
     input:
-        bam=(
-            "dedupalignments/{sample}.sorted.bam"
-            if config["dedup"]
-            else "alignments/{sample}.sorted.bam"
-        ),
-        bai=(
-            "dedupalignments/{sample}.sorted.bam.bai"
-            if config["dedup"]
-            else "alignments/{sample}.sorted.bam.bai"
-        ),
+        bam="dedupalignments/{sample}.sorted.bam",
+        bai="dedupalignments/{sample}.sorted.bam.bai",
     output:
         bw="alignments/{sample}_raw.bw",
     log:
@@ -975,10 +1016,11 @@ rule generate_html_report:
         macs3_width="stats/macs3/peaks_width_stats.txt",
         macs3_gc="stats/macs3/peaks_gc_content.txt",
         seacr_peaks=expand("peaks/seacr/{sample}.peaks.stringent.bed", sample=EXPERIMENT),
-        macs3_peaks=expand("peaks/macs3/{sample}_peaks.narrowPeak", sample=EXPERIMENT),
+        macs3_peaks=expand(f"peaks/macs3/{{sample}}{MACS_SUFFIX}", sample=EXPERIMENT),
         fragments=expand("alignments/{sample}.fraglengths.txt", sample=PE_SAMPLES),
         coverage_bins=expand("bedalignments/{sample}.bin.bed", sample=SAMPLES),
         tss_enrichment="stats/tss_enrichment.txt" if config["gtf_file"] else [],
+        consensus="stats/consensus_peaks.txt",
     output:
         html_report="reports/cutntag_analysis_report.html",
     log:
@@ -989,6 +1031,7 @@ rule generate_html_report:
         samplesheet=config["samplesheet"],
         outdir=config["outdir"],
         snakefile_dir=workflow.basedir,
+        macs3_suffix=MACS_SUFFIX,
     script:
         "scripts/render_html_report.R"
 
@@ -1016,3 +1059,238 @@ rule bedgraph_to_tdf:
 ruleorder: bam_to_bed_pe > bam_to_bed_se
 ruleorder: call_macs_peaks_pe > call_macs_peaks_se
 
+
+
+# ---------------------------------------------------------------------------
+# Consensus peaks (ENCODE-style): call peaks on pooled replicates of each
+# condition, keep pooled peaks supported by >= consensus_min_replicates replicates
+# ---------------------------------------------------------------------------
+rule pool_replicates:
+    input:
+        exp=lambda w: expand("bedalignments/{s}.fragments.bed", s=CONDITION_SAMPLES[w.condition]),
+        con=lambda w: expand("bedalignments/{s}.fragments.bed", s=condition_controls(w.condition)),
+    output:
+        exp=temp("peaks/consensus/pooled/{condition}.fragments.bed"),
+        con=temp("peaks/consensus/pooled/{condition}.control.fragments.bed"),
+    log:
+        "logs/pool_replicates/{condition}.log",
+    threads: 2
+    shell:
+        """
+        sort --parallel={threads} -k1,1 -k2,2n {input.exp} > {output.exp}
+        if [ -n "{input.con}" ]; then
+            sort --parallel={threads} -k1,1 -k2,2n {input.con} > {output.con}
+        else
+            touch {output.con}
+        fi
+        """
+
+rule call_seacr_pooled:
+    input:
+        exp="peaks/consensus/pooled/{condition}.fragments.bed",
+        con="peaks/consensus/pooled/{condition}.control.fragments.bed",
+        fai=config["reference_fai"],
+    output:
+        "peaks/consensus/seacr/{condition}.pooled.stringent.bed",
+    log:
+        "logs/call_seacr_pooled/{condition}.log",
+    conda:
+        "envs/seacr.yaml"
+    params:
+        has_igg=config["igg_control"],
+    shell:
+        """
+        tmp=$(mktemp -d peaks/consensus/seacr/{wildcards.condition}.XXXXXX)
+        trap 'rm -rf "$tmp"' EXIT
+        bedtools genomecov -bg -i {input.exp} -g <(cut -f 1,2 {input.fai}) > $tmp/exp.bedgraph
+        if [ {params.has_igg} == True ]; then
+            bedtools genomecov -bg -i {input.con} -g <(cut -f 1,2 {input.fai}) > $tmp/con.bedgraph
+            bash `which SEACR_1.3.sh` $tmp/exp.bedgraph $tmp/con.bedgraph norm stringent $tmp/out > {log} 2>&1 || true
+        else
+            bash `which SEACR_1.3.sh` $tmp/exp.bedgraph {config[seacr_qvalue]} norm stringent $tmp/out > {log} 2>&1 || true
+        fi
+        if [ -f $tmp/out.stringent.bed ]; then mv $tmp/out.stringent.bed {output}; else touch {output}; fi
+        """
+
+rule call_macs_pooled:
+    input:
+        exp="peaks/consensus/pooled/{condition}.fragments.bed",
+        con="peaks/consensus/pooled/{condition}.control.fragments.bed",
+    output:
+        f"peaks/consensus/macs3/{{condition}}.pooled{MACS_SUFFIX}",
+    log:
+        "logs/call_macs_pooled/{condition}.log",
+    conda:
+        "envs/macs.yaml"
+    params:
+        has_igg=config["igg_control"],
+        mode=MACS_MODE,
+    shell:
+        """
+        # pooled fragments (PE fragments, SE reads extended to 147 bp) are given to MACS3 as BEDPE
+        if [ {params.has_igg} == True ]; then
+            macs3 callpeak -t {input.exp} -c {input.con} -f BEDPE -g {config[genome_size]} -n "{wildcards.condition}.pooled" \\
+                --outdir peaks/consensus/macs3 {params.mode} --keep-dup all -q {config[macs3_qvalue_with_control]} 2> {log} || true
+        else
+            macs3 callpeak -t {input.exp} -f BEDPE -g {config[genome_size]} -n "{wildcards.condition}.pooled" \\
+                --outdir peaks/consensus/macs3 {params.mode} --keep-dup all -q {config[macs3_qvalue_no_control]} --nolambda 2> {log} || true
+        fi
+        [ -f {output} ] || touch {output}
+        """
+
+rule consensus_peaks:
+    input:
+        pooled=lambda w: pooled_peaks(w.caller, w.condition),
+        reps=lambda w: replicate_peaks(w.caller, w.condition),
+    output:
+        "peaks/consensus/{caller}/{condition}.consensus.bed",
+    log:
+        "logs/consensus_peaks/{caller}_{condition}.log",
+    conda:
+        "envs/bedtools.yaml"
+    params:
+        names=lambda w: CONDITION_SAMPLES[w.condition],
+        k=lambda w: consensus_threshold(w.condition),
+    shell:
+        """
+        # a pooled peak is supported by a replicate if they overlap by >= 50% of either peak (ENCODE rule)
+        tmp=$(mktemp -d peaks/consensus/{wildcards.caller}/{wildcards.condition}.XXXXXX)
+        trap 'rm -rf "$tmp"' EXIT
+        cut -f 1-3 {input.pooled} | sort -u -k1,1 -k2,2n -k3,3n > $tmp/pooled.bed
+        names=({params.names})
+        reps=({input.reps})
+        : > $tmp/support.bed
+        for i in "${{!reps[@]}}"; do
+            [ -s "${{reps[$i]}}" ] || continue
+            bedtools intersect -a $tmp/pooled.bed -b <(cut -f 1-3 "${{reps[$i]}}") -f 0.5 -F 0.5 -e -u \\
+                | awk -v OFS="\\t" -v n="${{names[$i]}}" '{{print $1, $2, $3, n}}' >> $tmp/support.bed
+        done
+        sort -k1,1 -k2,2n -k3,3n -k4,4 $tmp/support.bed \\
+        | awk -v OFS="\\t" -v k={params.k} '
+            {{key = $1 OFS $2 OFS $3
+              if (key != prev) {{if (prev != "" && n >= k) print prev, n, ids; prev = key; n = 0; ids = ""}}
+              n++; ids = ids (ids == "" ? "" : ",") $4}}
+            END {{if (prev != "" && n >= k) print prev, n, ids}}' > {output}
+        """
+
+rule consensus_summary:
+    input:
+        pooled=[pooled_peaks(c, d) for c in ["seacr", "macs3"] for d in CONSENSUS_CONDITIONS],
+        consensus=CONSENSUS_FILES,
+    output:
+        "stats/consensus_peaks.txt",
+    log:
+        "logs/consensus_summary/job.log",
+    run:
+        import statistics
+        def intervals(path):
+            with open(path) as f:
+                return [line.split("\t")[:3] for line in f if line.strip()]
+        with open(output[0], "w") as out:
+            out.write("condition\tcaller\tn_replicates\tmin_replicates\tpooled_peaks\tconsensus_peaks\tmedian_width\n")
+            for caller in ["seacr", "macs3"]:
+                for cond in CONSENSUS_CONDITIONS:
+                    pooled = {tuple(x) for x in intervals(pooled_peaks(caller, cond))}
+                    cons = intervals(f"peaks/consensus/{caller}/{cond}.consensus.bed")
+                    widths = [int(e) - int(s) for _, s, e in cons]
+                    median = statistics.median(widths) if widths else "NA"
+                    out.write(f"{cond}\t{caller}\t{len(CONDITION_SAMPLES[cond])}\t{consensus_threshold(cond)}\t"
+                              f"{len(pooled)}\t{len(cons)}\t{median}\n")
+
+
+# ---------------------------------------------------------------------------
+# MultiQC report of FastQC, Trim Galore, Bowtie2, Picard and FastQ Screen output
+# ---------------------------------------------------------------------------
+rule multiqc:
+    input:
+        fastqc=expand("qc/{sample}_{r}", sample=SAMPLES, r=[1, 2]),
+        screen=expand("qc/fastq_screen/{sample}_screen.txt", sample=SAMPLES),
+        aln=expand("alignments/{sample}.alignments.txt", sample=SAMPLES),
+        dup=expand("dedupalignments/{sample}.rmdup.txt", sample=SAMPLES),
+    output:
+        "reports/multiqc_report.html",
+    log:
+        "logs/multiqc/job.log",
+    conda:
+        "envs/multiqc.yaml"
+    params:
+        config=f"{workflow.basedir}/multiqc_config.yaml",
+        dirs="qc alignments dedupalignments" + (" trimmed" if config["trim_adapters"] else ""),
+    shell:
+        """
+        multiqc --force --config {params.config} --outdir reports --filename multiqc_report.html \\
+            --ignore '*.fq.gz' --ignore '*.fastq.gz' --ignore '*.bam' --ignore '*.bai' \\
+            {params.dirs} > {log} 2>&1
+        """
+
+
+# ---------------------------------------------------------------------------
+# Record the configuration and pinned software versions of the run
+# ---------------------------------------------------------------------------
+rule pipeline_info:
+    input:
+        envs=sorted(str(p) for p in Path(workflow.basedir, "envs").glob("*.yaml")),
+    output:
+        versions="reports/pipeline_info/software_versions.tsv",
+        config="reports/pipeline_info/config.json",
+        samplesheet="reports/pipeline_info/samplesheet.tsv",
+    log:
+        "logs/pipeline_info/job.log",
+    run:
+        import json, shutil, subprocess, yaml
+        import snakemake as smk
+        try:
+            commit = subprocess.run(["git", "-C", workflow.basedir, "describe", "--tags", "--always", "--dirty"],
+                                    capture_output=True, text=True, check=True).stdout.strip()
+        except Exception:
+            commit = "unknown"
+        with open(output.versions, "w") as out:
+            out.write("environment\tpackage\tversion\n")
+            out.write(f"workflow\tCAWS\t{commit}\n")
+            out.write(f"workflow\tsnakemake\t{smk.__version__}\n")
+            for env in input.envs:
+                for dep in yaml.safe_load(open(env)).get("dependencies", []):
+                    if isinstance(dep, str):
+                        # "tool=1.2=build", "tool==1.2" or "tool>=1.2": keep the name and version spec, drop builds
+                        name, spec = re.match(r"([^=<>!\s]+)\s*(.*)", dep).groups()
+                        version = spec.lstrip("=").split("=")[0] if spec.startswith("=") else spec
+                        out.write(f"{Path(env).stem}\t{name}\t{version or 'unpinned'}\n")
+        with open(output.config, "w") as out:
+            json.dump(config, out, indent=4)
+        shutil.copy(config["samplesheet"], output.samplesheet)
+
+
+# ---------------------------------------------------------------------------
+# IGV session with coverage tracks and peak calls (paths relative to tdf/)
+# ---------------------------------------------------------------------------
+IGV_PEAKS = (expand("peaks/seacr/{sample}.peaks.stringent.bed", sample=EXPERIMENT)
+             + expand(f"peaks/macs3/{{sample}}{MACS_SUFFIX}", sample=EXPERIMENT))
+
+rule igv_session:
+    input:
+        tdf=expand("tdf/{sample}.tdf", sample=SAMPLES),
+        peaks=IGV_PEAKS,
+        consensus=CONSENSUS_FILES,
+    output:
+        "tdf/igv_session.xml",
+    log:
+        "logs/igv_session/job.log",
+    run:
+        from xml.sax.saxutils import quoteattr
+        genome = config["igv_genome"]
+        if os.path.isfile(genome):
+            # IGV cannot use a chrom.sizes file as a genome; use the indexed reference FASTA instead
+            genome = os.path.abspath(config["reference_fa"] if genome.endswith(".sizes") else genome)
+        # experimental samples grouped by condition, then controls
+        order = sorted(EXPERIMENT, key=lambda s: (samplesheet.loc[s, "condition"], s)) + CONTROL
+        tracks = [(f"{s}.tdf", s) for s in order]
+        tracks += [(f"../{p}", f"{Path(p).parts[-2]} consensus: {Path(p).name.removesuffix('.consensus.bed')}")
+                   for p in input.consensus]
+        tracks += [(f"../{p}", f"{Path(p).parts[-2]}: {Path(p).name.removesuffix('.peaks.stringent.bed').removesuffix(MACS_SUFFIX)}")
+                   for p in input.peaks]
+        with open(output[0], "w") as out:
+            out.write('<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n')
+            out.write(f'<Session genome={quoteattr(genome)} locus="All" version="8">\n    <Resources>\n')
+            for path, name in tracks:
+                out.write(f"        <Resource name={quoteattr(name)} path={quoteattr(path)}/>\n")
+            out.write("    </Resources>\n</Session>\n")

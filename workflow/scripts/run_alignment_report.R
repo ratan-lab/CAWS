@@ -53,6 +53,11 @@ df3 <- snakemake@input[["screen"]] |>
                   OnlyRate = paste0(round(`%One_hit_one_genome` + `%Multiple_hits_one_genome`, 2), "%"))) |>
     pivot_wider(names_from = Genome, values_from = OnlyRate, names_glue = "{Genome}OnlyRate")
 
+# whether duplicates were removed for each sample (dedup setting / samplesheet column)
+dedup_samples <- unlist(snakemake@params[["dedup_samples"]])
+df2 <- df2 |>
+    mutate(Deduplicated = if_else(Sample %in% dedup_samples, "yes", "no"), .after = DuplicationRate)
+
 result <- left_join(df1, df2, by=c("Sample"="Sample")) |>
           left_join(df3, by=c("Sample"="Sample"))
 

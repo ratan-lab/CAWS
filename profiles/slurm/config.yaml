@@ -112,7 +112,25 @@ set-resources:
     mem_mb: 8000
     runtime: 120
 
+  pool_replicates:
+    threads: 2
+    mem_mb: 8000
+    runtime: 120
+
+  call_seacr_pooled:
+    threads: 1
+    mem_mb: 12000
+    runtime: 180
+
+  call_macs_pooled:
+    threads: 1
+    mem_mb: 16000
+    runtime: 240
+
+  multiqc:
+    threads: 1
+    mem_mb: 8000
+    runtime: 60
+
 # SLURM executor plugin configuration
 slurm-status-command: sacct  # Force sacct instead of squeue for job status
-
-

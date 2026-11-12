@@ -121,6 +121,7 @@ sample4_SE	Control	group2	/path/to/sample4.fastq.gz	NA
 
 - `condition`: `Control` (exact, case-sensitive) marks IgG controls; any other value is an experimental condition. Peaks are called only for experimental samples. Samples with the same condition are treated as replicates for peak reproducibility.
 - `group`: links experimental samples to their IgG control. With `igg_control: true`, each group must contain exactly one `Control` and at least one experimental sample, and experimental samples and their control must have the same read type (both SE or both PE).
+- `dedup` (optional column): `yes` or `no` overrides the global `dedup` setting for that sample, e.g. to remove duplicates from a low-input library expected to be over-amplified. Leave empty (or omit the column) to use the global setting.
 
 **Single-end indicators**: Use any of these values in the `read2` column to mark a sample as single-end: `-`, `NA`, `na`, `n/a`, `null`, `none`, `nan`, `nil`, `empty`, `0`, `false`, `missing`, `absent`, `single`, or `se`.
 
@@ -364,7 +365,7 @@ Create `config.json`:
     "trim_adapters": true,
     "igg_control": true,
     "mt_chrom": "chrM",
-    "dedup": true,
+    "dedup": "controls",
     "minquality": 10,
     "fragment_min": 0,
     "fragment_max": 700,
@@ -464,7 +465,7 @@ Peak heatmaps (`stats/seacr/*.heatmap.png`) and the TSS profile plot (`stats/tss
 <details>
 <summary><b>Click to expand configuration documentation</b></summary>
 
-All keys below must be present; start from the template `config.json` in the repository.
+Start from the template `config.json` in the repository. Keys marked *optional* can be left out and take the default shown; all others must be present.
 
 | Parameter | Description |
 |------------|-------------|
@@ -479,14 +480,16 @@ All keys below must be present; start from the template `config.json` in the rep
 | `trim_adapters` | `true`/`false` — enable adapter trimming via Trim Galore. Also selects the Bowtie2 mode: `--local` with trimming, `--end-to-end` without |
 | `igg_control` | `true`/`false` — use IgG controls as background for peak calling (SEACR control bedgraph, MACS3 `-c`). Requires exactly one `Control` per samplesheet `group` |
 | `mt_chrom` | Name of mitochondrial chromosome (e.g., `"chrM"`) |
-| `dedup` | `true`/`false` — use deduplicated BAMs (Picard MarkDuplicates) for all downstream steps. Picard runs either way, so duplication rates are always reported |
+| `dedup` | *Optional*, default `"controls"`: remove PCR duplicates (Picard MarkDuplicates) from IgG controls only. `true` removes them from all samples, `false` from none; the samplesheet `dedup` column overrides this per sample. See [Duplicate Removal](#duplicate-removal) |
 | `minquality` | Minimum mapping quality (MAPQ) for reads used in peak calling, FRiP, coverage correlation and TDF tracks |
 | `fragment_min`, `fragment_max` | Minimum/maximum fragment length for paired-end alignment (Bowtie2 `-I`/`-X`). Fragments longer than 1000 bp are additionally removed before peak calling |
 | `genome_size` | Genome size for MACS3 peak calling: `"hs"` (human), `"mm"` (mouse), `"ce"` (C. elegans), `"dm"` (Drosophila), or numeric value (e.g., `2.7e9`) |
 | `seacr_qvalue` | Used only when `igg_control` is `false`: SEACR's numeric threshold, i.e. the top fraction of peaks kept by total signal (e.g. `0.01` = top 1%). With IgG, SEACR uses the control bedgraph instead |
 | `macs3_qvalue_with_control`, `macs3_qvalue_no_control` | MACS3 q-value cutoffs with and without IgG control. Single-end samples are called with `--nomodel --extsize 147` (Tn5 cuts lack the strand bimodality MACS3 models); paired-end samples use actual fragments (`-f BAMPE`) |
+| `macs3_broad`, `macs3_broad_cutoff` | *Optional*, defaults `false` and `0.1`: call broad peaks with MACS3 (`--broad --broad-cutoff`), e.g. for H3K27me3 or H3K36me3. Output is then `*_peaks.broadPeak` instead of `*_peaks.narrowPeak` |
+| `consensus_min_replicates` | *Optional*, default `2`: minimum number of replicates that must support a pooled peak for it to enter the consensus peak set (capped at the number of replicates in the condition) |
 | `heatmap_window` | Distance (bp) on each side of SEACR peak summits for the peak heatmaps |
-| `igv_genome` | Genome for IGV TDF generation: an igvtools genome ID (e.g., `"hg38"`, `"mm10"`) or a path to a chrom.sizes file |
+| `igv_genome` | Genome for IGV TDF generation and the IGV session: an igvtools genome ID (e.g., `"hg38"`, `"mm10"`) or a path to a chrom.sizes file (the session then uses `reference_fa` as the genome) |
 | `gtf_file` | Path to GTF file for TSS enrichment (optional; `""` to skip) |
 | `outdir` | Output directory for analysis results. Snakemake runs inside this directory |
 
@@ -508,7 +511,7 @@ All keys below must be present; start from the template `config.json` in the rep
     "trim_adapters": true,
     "igg_control": false,
     "mt_chrom": "chrM",
-    "dedup": true,
+    "dedup": "controls",
     "minquality": 3,
     "fragment_min": 10,
     "fragment_max": 700,
@@ -632,9 +635,10 @@ tail -f logs/rulename/*   # Watch specific rule logs
 ### Core Pipeline
 - Adapter trimming (**Trim Galore**) and read QC (**FastQC**, on trimmed reads when trimming is enabled)
 - Alignment (**Bowtie2**; paired-end in concordant-pair mode)
-- Duplicate removal (**Picard**), with duplication rate and estimated library size (paired-end)
+- Duplicate removal (**Picard**) from IgG controls by default, configurable for all samples or per sample; duplication rate and estimated library size (paired-end) are reported for every sample
 - Filtering by mapping quality, chromosome list and blacklist
-- Peak calling with both **SEACR** (stringent) and **MACS3**; IgG control used by both when enabled. Paired-end samples use actual fragments (`BAMPE`); single-end samples use a fixed 147 bp extension
+- Peak calling with both **SEACR** (stringent) and **MACS3** (narrow or broad peaks); IgG control used by both when enabled. Paired-end samples use actual fragments (`BAMPE`); single-end samples use a fixed 147 bp extension
+- Consensus peaks per condition (ENCODE-style): peaks are called on the pooled replicates of each condition and kept if they overlap peaks in at least `consensus_min_replicates` replicates by at least 50% of either peak. Pooling uses fragments, with single-end reads extended to 147 bp, so conditions can mix single-end and paired-end replicates; IgG controls of the condition's groups are pooled the same way
 - Contamination screening (**FastQ Screen**: *E. coli*, bovine, or any configured genome) and mitochondrial read fraction
 
 ### QC Metrics and Visualization
@@ -646,6 +650,9 @@ tail -f logs/rulename/*   # Watch specific rule logs
 - Signal heatmaps around SEACR peak summits (**deepTools**)
 - CPM-normalized IGV tracks (TDF; fragment coverage for paired-end, read coverage for single-end) and unfiltered bigWig tracks (used for peak heatmaps and TSS enrichment)
 - Interactive HTML dashboard (**flexdashboard**/**Plotly**) with exportable tables
+- **MultiQC** report of FastQC, Trim Galore, Bowtie2, Picard and FastQ Screen results
+- IGV session file that loads all coverage tracks and peak sets
+- Record of the configuration, samplesheet and pinned software versions used for the run
 
 ---
 
@@ -658,22 +665,27 @@ tail -f logs/rulename/*   # Watch specific rule logs
 output_directory/
 ├── qc/                  # FastQC reports; fastq_screen/ contaminant screens
 ├── trimmed/             # Adapter-trimmed reads
-├── alignments/          # Bowtie2 logs, fragment lengths, mtDNA counts, bigWigs (raw BAMs removed when dedup=true)
-├── dedupalignments/     # Deduplicated BAMs (quality-filtered versions preserved)
+├── alignments/          # Bowtie2 logs, fragment lengths, mtDNA counts, bigWigs
+├── dedupalignments/     # BAMs used downstream (deduplicated where dedup applies), Picard metrics, filtered BAMs
 ├── bedalignments/       # Raw-count bedgraphs (SEACR input) and 500 bp binned counts
 ├── peaks/
 │   ├── seacr/           # SEACR peaks
-│   └── macs3/           # MACS3 peaks
-├── stats/               # stats.txt, peaks_consolidated.txt, TSS enrichment
+│   ├── macs3/           # MACS3 peaks
+│   └── consensus/       # pooled peak calls and consensus peaks per condition (seacr/, macs3/)
+├── stats/               # stats.txt, peaks_consolidated.txt, consensus_peaks.txt, TSS enrichment
 │   ├── seacr/           # SEACR metrics, peak GC, peak heatmaps
 │   └── macs3/           # MACS3 metrics, peak GC
-├── tdf/                 # IGV TDF coverage tracks, CPM-normalized (one per sample)
-├── reports/             # Interactive HTML report
+├── tdf/                 # IGV TDF coverage tracks, CPM-normalized (one per sample), igv_session.xml
+├── reports/             # HTML report, MultiQC report, pipeline_info/ (config, samplesheet, software versions)
 ├── annotations/         # GTF-based TSS data
 └── logs/                # Log files
 ```
 
-**Note on alignment cleanup**: When `dedup` is `true`, the raw `alignments/{sample}.sorted.bam` (and index) are marked as temporary and removed once the deduplicated BAMs in `dedupalignments/` have been created and all other consumers have finished. Run with `--notemp` to keep them. When `dedup` is `false`, the raw BAMs are retained because they are the primary alignments.
+**Note on alignments**: every sample has its BAM in `dedupalignments/`: deduplicated where `dedup` applies, otherwise an unchanged copy of the alignments. The raw `alignments/{sample}.sorted.bam` (and index) are temporary and removed once all steps that use them have finished; run with `--notemp` to keep them.
+
+**Note on IGV sessions**: open `tdf/igv_session.xml` in IGV (File → Open Session) to load the TDF tracks of all samples (experimental samples grouped by condition, then controls), the consensus peaks and the per-sample peak calls. Paths are relative, so keep the output directory layout when copying it.
+
+**Note on consensus peaks**: `peaks/consensus/{seacr,macs3}/{condition}.consensus.bed` lists, for each consensus peak, the number and names of supporting replicates. Conditions with a single replicate have no consensus peaks.
 
 **Note on TDF tracks**: TDF files are generated from coverage scaled to counts per million filtered fragments (CPM, excluding fragments on `mt_chrom` from the total), so tracks are comparable across samples in IGV. The raw-count bedgraphs in `bedalignments/` are kept for SEACR.
 
@@ -686,8 +698,8 @@ output_directory/
 **Report:** `reports/cutntag_analysis_report.html`  
 
 ### Dashboard Pages  
-- **Sample Details:** per-sample peak counts, FRiP and peak GC for SEACR and MACS3, plus TSS enrichment score (if a GTF is provided)  
-- **Alignment:** alignment statistics table and rates (alignment, duplication, mtDNA, contaminants)  
+- **Sample Details:** per-sample peak counts, FRiP and peak GC for SEACR and MACS3, plus TSS enrichment score (if a GTF is provided), and consensus peak counts per condition  
+- **Alignment:** alignment statistics table (including whether each sample was deduplicated) and rates (alignment, duplication, mtDNA, contaminants)  
 - **Fragment Length:** fragment size distributions (paired-end samples)  
 - **Coverage Similarity:** correlation of binned coverage between all samples  
 - **SEACR / MACS3:** peak counts, FRiP, width distributions and width categories by condition  
@@ -696,6 +708,61 @@ output_directory/
 **Interactive Features:**  
 - Plotly-based zoom/pan/hover  
 - Sortable, searchable tables with export buttons  
+
+A separate **MultiQC** report (`reports/multiqc_report.html`) collects the FastQC, Trim Galore, Bowtie2, Picard and FastQ Screen results in the standard MultiQC format.
+
+---
+
+## QC Metrics  
+
+<details>
+<summary><b>Click to expand the definitions of the reported metrics</b></summary>
+
+**`stats/stats.txt`** (one row per sample; also the table on the report's Alignment page). A *fragment* is a read pair for paired-end samples and a read for single-end samples.
+
+| Column | Meaning |
+|---|---|
+| `SequencingDepth` | Fragments given to Bowtie2 (after trimming) |
+| `MappedFragNum` | Fragments aligned once or more than once (paired-end: concordant pairs only) |
+| `UniqueMappedFragNum` | Fragments aligned exactly once |
+| `AlignmentRate` | Bowtie2 overall alignment rate |
+| `UniqueAlignmentRate` | `UniqueMappedFragNum` / `SequencingDepth` |
+| `MtNumReads`, `MtAlignmentRate` | Fragments on `mt_chrom` (counted once per fragment, before duplicate removal) and their share of `SequencingDepth`. High values usually indicate open-chromatin background rather than targeted signal |
+| `EstimatedLibrarySize` | Picard's estimate of the number of distinct molecules in the library (paired-end only; `NA` for single-end) |
+| `DuplicationRate` | Percentage of aligned fragments marked as duplicates by Picard. Calculated for every sample, whether or not duplicates are removed |
+| `Deduplicated` | Whether duplicates were removed for this sample (see [Duplicate Removal](#duplicate-removal)) |
+| `UniqueFragNum` | Aligned fragments that are not duplicates, i.e. the number remaining after deduplication (for samples that are not deduplicated, the number that *would* remain) |
+| `<Genome>OnlyRate` | One column per contaminant genome: percentage of screened reads (a subsample of `contaminant_subset` read 1 sequences) that map to that genome and not to the host or any other screened genome (FastQ Screen "one genome" hits) |
+
+**`stats/peaks_consolidated.txt`** (one row per experimental sample; `seacr_` and `macs3_` columns for each caller).
+
+| Column | Meaning |
+|---|---|
+| `peakN` | Number of peaks |
+| `peakReprodNum`, `peakReprodRate` | Peaks that overlap a peak of any other replicate of the same condition, as a count and as a percentage of `peakN` (`NA` for conditions with one sample) |
+| `FRiP` | Fraction of reads in peaks, in percent: filtered fragments overlapping a peak / all filtered fragments |
+| `median_width`, `mean_width` | Peak width in bp |
+| `pct_narrow`, `pct_broad` | Percentage of peaks ≤ 500 bp and > 2000 bp |
+| `median_gc` | Median GC fraction of the peak sequences |
+
+Consensus peak statistics (`stats/consensus_peaks.txt`) are described under [Consensus Peaks](#consensus-peaks) and the TSS enrichment score under [TSS Enrichment Analysis](#tss-enrichment-analysis).
+</details>
+
+---
+
+## Duplicate Removal  
+
+<details>
+<summary><b>Click to expand details</b></summary>
+
+By default (`dedup: "controls"`), CAWS removes PCR duplicates from IgG controls only and keeps them in experimental samples.
+
+**Why targets are not deduplicated by default.** CUT&Tag libraries are PCR-amplified, but pA-Tn5 is tethered at its target and inserts preferentially into accessible DNA nearby, so independent cells often produce fragments with identical ends. In high-quality libraries most apparent duplicates at target sites are therefore real signal, and removing them caps the signal exactly where it is strongest. This is especially true for single-end data, where a "duplicate" only needs the same start position and strand. IgG controls, in contrast, come from little DNA, have low complexity and are dominated by true PCR duplicates, which would otherwise inflate the background used for peak calling. Without unique molecular identifiers (UMIs) the two cannot be told apart, so this is a trade-off; nf-core/cutandrun uses the same default.
+
+**When to deduplicate a target sample.** Libraries made from very little material or amplified with many PCR cycles can be dominated by PCR duplicates. Signs of this are a high `DuplicationRate` together with a small `EstimatedLibrarySize` compared with other libraries of the same mark (see [QC Metrics](#qc-metrics)). For such samples, set `dedup` to `yes` in the samplesheet; set `dedup: true` in `config.json` to deduplicate all samples, or `false` to deduplicate none.
+
+**How it works.** Picard MarkDuplicates runs on every sample, so duplication metrics are always reported. Where duplicates are removed, downstream steps use the deduplicated alignments; otherwise they use the alignments unchanged. Both are stored in `dedupalignments/`, and the `Deduplicated` column of `stats/stats.txt` records the choice for each sample. MACS3 is run with `--keep-dup all` (as in nf-core/cutandrun, ePeak and CUT&RUNTools), so it does not remove duplicates on its own and this setting alone decides how duplicates are handled.
+</details>
 
 ---
 
@@ -723,6 +790,32 @@ Enable by specifying a GTF file in your configuration:
 - `stats/tss_matrix.gz` — deepTools matrix  
 
 The score is computed from the unfiltered bigWig tracks.
+</details>
+
+---
+
+## Consensus Peaks  
+
+<details>
+<summary><b>Click to expand details</b></summary>
+
+For every experimental condition with at least two replicates, CAWS builds one consensus peak set per peak caller, following the ENCODE approach for histone marks:
+
+1. **Pool the replicates.** The filtered fragments of all replicates of the condition are combined. Paired-end samples contribute their sequenced fragments; single-end reads are extended to 147 bp along their strand. The IgG controls of all groups that the condition's samples belong to are pooled the same way when `igg_control` is `true`.
+2. **Call peaks on the pool.** SEACR runs on a bedgraph of the pooled fragments (with the pooled IgG bedgraph, or `seacr_qvalue` without IgG); MACS3 runs on the pooled fragments as BEDPE (with the pooled IgG as control, or `--nolambda` without), in broad mode if `macs3_broad` is set.
+3. **Keep peaks supported by the replicates.** A pooled peak is supported by a replicate if it overlaps one of that replicate's peaks by at least 50% of the length of either peak. Pooled peaks supported by at least `consensus_min_replicates` replicates (default 2, capped at the number of replicates) form the consensus set.
+
+**Design decisions:**
+- **Peak boundaries come from the pooled peak call.** Merging overlapping replicate peaks instead (e.g. with `bedtools merge`) chains peaks together, so consensus regions can become wider than any peak that was called, especially for broad marks and SEACR domains. Calling peaks on the pool keeps natural boundaries and needs no merge distance.
+- **50% of either peak.** Requiring the overlap to cover half of the pooled peak *or* half of the replicate peak ignores small overlaps at peak edges, while a narrow replicate peak lying inside a broad pooled domain (common for single-end replicates of broad marks) still counts as support.
+- **Mixed read layouts.** Extending single-end reads to 147 bp (one nucleosome, the same assumption MACS3 makes for single-end samples) lets single-end and paired-end replicates be pooled in one condition.
+- **Pooled controls.** A condition can span several groups, each with its own IgG; pooling those controls gives a background that matches the pooled sample.
+- **Single-replicate conditions are skipped.** One sample cannot show agreement between replicates; CAWS does not create pseudo-replicates.
+
+**Outputs** (`peaks/consensus/`):
+- `{seacr,macs3}/{condition}.consensus.bed` — consensus peaks: chromosome, start, end, number of supporting replicates, supporting sample names
+- `seacr/{condition}.pooled.stringent.bed`, `macs3/{condition}.pooled_peaks.narrowPeak` (or `.broadPeak`) — all peaks called on the pooled replicates
+- `stats/consensus_peaks.txt` — per condition and caller: number of replicates, support threshold, pooled peaks, consensus peaks and median width (also shown on the report's Sample Details page)
 </details>
 
 ---

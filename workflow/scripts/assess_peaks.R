@@ -10,13 +10,8 @@ samplesheet <- read_tsv(as.character(snakemake@params[["samplesheet"]]))
 folder <- as.character(snakemake@params[["subdir"]])
 method <- as.character(snakemake@params[["method"]])
 
-suffix <- NA
-if (method == "SEACR") {
-    suffix <- ".peaks.stringent.bed"
-} else if (method == "MACS") {
-    suffix <- "_peaks.narrowPeak"
-}
-stopifnot(is.na(suffix) == FALSE)
+# peak file suffix, e.g. ".peaks.stringent.bed" or "_peaks.narrowPeak" / "_peaks.broadPeak"
+suffix <- as.character(snakemake@params[["suffix"]])
 
 peakN = tibble()
 peakW = tibble()
