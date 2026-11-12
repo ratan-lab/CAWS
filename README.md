@@ -1,9 +1,10 @@
 # CAWS: CUT&Tag Analysis Workflow System  
 ## *A Snakemake-based pipeline for comprehensive CUT&Tag data analysis*  
 
+[![test](https://github.com/ratan-lab/CAWS/actions/workflows/test.yml/badge.svg)](https://github.com/ratan-lab/CAWS/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Snakemake](https://img.shields.io/badge/snakemake-≥9.0.0-brightgreen.svg)](https://snakemake.readthedocs.io)
-[![Python](https://img.shields.io/badge/python-≥3.7-blue.svg)](https://python.org)
+[![Python](https://img.shields.io/badge/python-≥3.11-blue.svg)](https://python.org)
 [![R](https://img.shields.io/badge/R-≥4.0-blue.svg)](https://r-project.org)
 
 ---
@@ -40,7 +41,7 @@ CAWS is designed for:
 ### Required Software
 - **Snakemake** ≥9.0.0 (tested with 9.8.1)
 - **Conda** ≥24.7.1
-- **Python** ≥3.7
+- **Python** ≥3.11 (required by Snakemake 9)
 - **R** ≥4.0
 
 **Important Notes**:
@@ -51,7 +52,7 @@ CAWS is designed for:
 - **Storage**: ~50 GB free space (typical dataset)  
 - **Memory**: ≥8 GB RAM (16 GB+ recommended)  
 - **CPU**: ≥4 cores  
-- **OS**: Linux or macOS (cluster execution recommended)  
+- **OS**: Linux (x86-64); HPC cluster execution recommended. macOS and Windows are not supported because several tool builds used by the pipeline are Linux-only.  
 
 ### Input Data Requirements
 - **FASTQ** files (gzipped) — supports both **single-end** and **paired-end** sequencing data
@@ -215,15 +216,43 @@ reports/cutntag_analysis_report.html
 
 ---
 
+## Testing the Installation
+
+The repository includes a small test dataset in `.test/data` (about 7 MB): H3K27me3 and IgG CUT&Tag reads from K562 cells (Kaya-Okur et al., 2019), subset to a 4 Mb window of chr22, with paired-end and single-end samples. See `.test/data/PROVENANCE.txt` for how it was made. To run it:
+
+```bash
+conda env create -f envs/snakemake-runner.yaml
+conda create -n caws-setup -c conda-forge -c bioconda bowtie2=2.5.1 samtools
+
+# Build indexes and write the test samplesheet and config into .test/run/
+conda run -n caws-setup bash .test/setup.sh
+
+conda activate caws-snakemake
+snakemake -s workflow/Snakefile --configfile .test/run/config.json --use-conda --cores 4
+bash .test/check_outputs.sh
+```
+
+Results are written to `.test/run/out/`. The first run takes longer because Snakemake creates the conda environments for each tool. The same test runs on every push through GitHub Actions (`.github/workflows/test.yml`).
+
+---
+
 ## Example Analysis with Public Data
 
-This example demonstrates a complete CAWS analysis using publicly available CUT&Tag data. We'll analyze H3K4me3 (active promoter mark) samples from a published study.
+This example demonstrates a complete CAWS analysis using publicly available CUT&Tag data. We'll analyze H3K4me3 (active promoter mark) samples from Kaya-Okur et al. (2019), *Nature Communications* 10:1930.
 
 ### Dataset Information
 
 - **Study**: CUT&Tag profiling of H3K4me3 in human K562 cells
-- **Data Source**: NCBI GEO (Gene Expression Omnibus)
+- **Data Source**: NCBI GEO [GSE124557](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE124557)
 - **Sample Size**: 4 samples (2 H3K4me3 + 2 IgG controls)
+
+| Sample | GEO | SRA runs |
+|---|---|---|
+| H3K4me3_rep1 | GSM3536518 | SRR8383516, SRR8383517 |
+| H3K4me3_rep2 | GSM3680226 | SRR8754610 |
+| IgG_rep1 | GSM3560264 | SRR8435051, SRR8435052 |
+| IgG_rep2 | GSM3680227 | SRR8754611, SRR8754612 |
+
 - **Sequencing**: Paired-end Illumina
 - **Reference**: Human (hg38)
 
@@ -236,21 +265,23 @@ mkdir -p cutntag_example && cd cutntag_example
 # Download FASTQ files from SRA using SRA Toolkit
 # Install SRA Toolkit if needed: conda install -c bioconda sra-tools
 
-# H3K4me3 treatment samples (example accessions)
-fastq-dump --split-files --gzip SRR13577661
-fastq-dump --split-files --gzip SRR13577662
+for run in SRR8383516 SRR8383517 SRR8754610 SRR8435051 SRR8435052 SRR8754611 SRR8754612; do
+    fasterq-dump --split-files "$run"
+done
 
-# IgG control samples
-fastq-dump --split-files --gzip SRR13577663
-fastq-dump --split-files --gzip SRR13577664
-
-# This will create files like:
-# SRR13577661_1.fastq.gz, SRR13577661_2.fastq.gz (treatment replicate 1)
-# SRR13577662_1.fastq.gz, SRR13577662_2.fastq.gz (treatment replicate 2)
-# etc.
+# Some libraries were sequenced in two runs; combine runs per library
+combine() {  # usage: combine <sample> <run>...
+    sample=$1; shift
+    for r in 1 2; do
+        for run in "$@"; do cat "${run}_${r}.fastq"; done | gzip > "${sample}_R${r}.fastq.gz"
+    done
+}
+combine H3K4me3_rep1 SRR8383516 SRR8383517
+combine H3K4me3_rep2 SRR8754610
+combine IgG_rep1 SRR8435051 SRR8435052
+combine IgG_rep2 SRR8754611 SRR8754612
+rm SRR*.fastq
 ```
-
-**Note**: Replace the SRR accessions above with actual accessions from your chosen GEO dataset. To find CUT&Tag datasets, visit [NCBI GEO](https://www.ncbi.nlm.nih.gov/geo/) and search for "CUT&Tag".
 
 ### Step 2: Prepare Reference Files
 
@@ -294,10 +325,10 @@ Create `samplesheet.tsv`:
 
 ```tsv
 sampleID	condition	group	read1	read2
-H3K4me3_rep1	Treatment	H3K4me3	/path/to/SRR13577661_1.fastq.gz	/path/to/SRR13577661_2.fastq.gz
-H3K4me3_rep2	Treatment	H3K4me3	/path/to/SRR13577662_1.fastq.gz	/path/to/SRR13577662_2.fastq.gz
-IgG_rep1	Control	H3K4me3	/path/to/SRR13577663_1.fastq.gz	/path/to/SRR13577663_2.fastq.gz
-IgG_rep2	Control	H3K4me3	/path/to/SRR13577664_1.fastq.gz	/path/to/SRR13577664_2.fastq.gz
+H3K4me3_rep1	Treatment	H3K4me3	/path/to/H3K4me3_rep1_R1.fastq.gz	/path/to/H3K4me3_rep1_R2.fastq.gz
+H3K4me3_rep2	Treatment	H3K4me3	/path/to/H3K4me3_rep2_R1.fastq.gz	/path/to/H3K4me3_rep2_R2.fastq.gz
+IgG_rep1	Control	H3K4me3	/path/to/IgG_rep1_R1.fastq.gz	/path/to/IgG_rep1_R2.fastq.gz
+IgG_rep2	Control	H3K4me3	/path/to/IgG_rep2_R1.fastq.gz	/path/to/IgG_rep2_R2.fastq.gz
 ```
 
 **Important**: Replace `/path/to/` with absolute paths to your downloaded FASTQ files.
@@ -824,6 +855,13 @@ ls -lh /path/to/file
 3. Ensure paths don't contain spaces or special characters
 
 </details>
+
+---
+
+## Getting Help and Contributing
+
+- **Questions and bug reports**: open an issue at https://github.com/ratan-lab/CAWS/issues. Please include your `config.json`, the samplesheet (paths can be redacted), the failing rule's log from `logs/`, and the Snakemake and conda versions.
+- **Contributing**: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 

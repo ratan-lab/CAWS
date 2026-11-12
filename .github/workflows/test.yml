@@ -26,11 +26,10 @@ jobs:
           activate-environment: caws-snakemake
           conda-remove-defaults: true
 
-      - name: Install tools for test setup
-        run: conda install -y -c conda-forge -c bioconda bowtie2=2.5.1 samtools
-
       - name: Prepare test data
-        run: bash .test/setup.sh
+        run: |
+          conda create -y -n caws-setup -c conda-forge -c bioconda bowtie2=2.5.1 samtools
+          conda run --no-capture-output -n caws-setup bash .test/setup.sh
 
       - name: Dry runs (IgG control and deduplication on/off)
         run: |
