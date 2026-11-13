@@ -59,6 +59,8 @@ cat > "$RUN/config.json" <<EOF
         "Ecoli": "$RUN/ref/ecoli"
     },
     "contaminant_subset": 1000000,
+    "spikein_genome": "Ecoli",
+    "normalization": "spikein",
     "trim_adapters": true,
     "igg_control": true,
     "mt_chrom": "chrM",

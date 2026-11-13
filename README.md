@@ -59,7 +59,7 @@ All other tools, including R and its packages, are installed automatically by Sn
 - Reference genome (**FASTA**, its `.fai` index, and a Bowtie2 index)
 - **Chromosome list** (plain text, one chromosome name per line) — only reads on these chromosomes are used for peak calling and coverage
 - **Blacklist** regions (**BED**)
-- **Contaminant genomes** (Bowtie2 indexes, at least one; e.g. *E. coli*)
+- **Contaminant genomes** (Bowtie2 indexes, at least one, e.g. *E. coli*). *E. coli* also serves as the spike-in for optional spike-in normalization
 - **Annotation** file (**GTF**, optional, for TSS enrichment) and other **region sets** (BED, optional) for enrichment analysis
 - **Sample metadata** (**TSV**)
 
@@ -357,6 +357,8 @@ Create `config.json`:
         "Bovine": "/path/to/bovine_index"
     },
     "contaminant_subset": 1000000,
+    "spikein_genome": "Ecoli",
+    "normalization": "cpm",
     "gtf_file": "/path/to/gencode.v47.annotation.gtf",
     "trim_adapters": true,
     "igg_control": true,
@@ -423,8 +425,8 @@ sbatch run_example.sh
 
 See [Output Structure](#output-structure) for the full layout. **Key Outputs**:
 1. **Peak files**: `results/peaks/seacr/H3K4me3_rep1.peaks.stringent.bed`, `results/peaks/macs3/H3K4me3_rep1_peaks.narrowPeak`
-2. **Coverage tracks**: `results/tdf/H3K4me3_rep1.tdf` (CPM-normalized, for IGV) and `results/alignments/H3K4me3_rep1_raw.bw` (unfiltered, unnormalized)
-3. **QC metrics**: `results/stats/stats.txt` (alignment, duplication, mtDNA, contaminants) and `results/stats/peaks_consolidated.txt` (peak counts, reproducibility, FRiP, widths, GC)
+2. **Coverage tracks**: `results/tdf/H3K4me3_rep1.tdf` (for IGV) and `results/bigwig/H3K4me3_rep1.bw` (for other genome browsers and deepTools), both normalized as set by `normalization` (CPM by default). See [Normalization](#normalization)
+3. **QC metrics**: `results/stats/stats.txt` (alignment, duplication, mtDNA, contaminants, *E. coli* spike-in fragments) and `results/stats/peaks_consolidated.txt` (peak counts, reproducibility, FRiP, widths, GC)
 4. **Final report**: `results/reports/cutntag_analysis_report.html`
 
 **What to expect for H3K4me3** (rough guides, not thresholds enforced by the pipeline):
@@ -471,15 +473,17 @@ Start from the template `config.json` in the repository. Keys marked *optional* 
 | `reference_fa` | Reference genome FASTA file |
 | `bt2_idx` | Bowtie2 index prefix for the reference genome |
 | `reference_fai` | FASTA index file |
-| `chromosome_file` | Text file with one chromosome name per line; only reads on these chromosomes are used for peak calling, FRiP, coverage correlation and TDF tracks |
+| `chromosome_file` | Text file with one chromosome name per line; only reads on these chromosomes are used for peak calling, FRiP, coverage correlation and coverage tracks |
 | `blacklist` | BED file of genomic regions to exclude |
 | `contaminant_genomes` | Map of contaminant name → Bowtie2 index prefix, screened with FastQ Screen against the host genome (e.g., `{"Ecoli": "...", "Bovine": "..."}`). Names must be valid identifiers (letters, digits, underscore; not starting with a digit); `Host` is reserved |
 | `contaminant_subset` | Number of read 1 sequences sampled per library for FastQ Screen (the template uses `1000000`; `0` screens all reads) |
+| `spikein_genome` | *Optional*, default `""`: name of the `contaminant_genomes` entry that serves as spike-in, usually `"Ecoli"` (carry-over DNA from pA-Tn5). When set, spike-in fragments are counted for every sample and reported in `stats/stats.txt`. See [Normalization](#normalization) |
+| `normalization` | *Optional*, default `"cpm"`: scaling of the coverage tracks (TDF, bigWig) and region signal profiles. `"cpm"` scales to fragments per million filtered fragments. `"spikein"` scales to fragments per 10,000 spike-in fragments and needs `spikein_genome`. Peak calling is not affected. See [Normalization](#normalization) |
 | `trim_adapters` | `true`/`false` — enable adapter trimming via Trim Galore. Also selects the Bowtie2 mode: `--local` with trimming, `--end-to-end` without |
 | `igg_control` | `true`/`false` — use IgG controls as background for peak calling (SEACR control bedgraph, MACS3 `-c`). Requires exactly one `Control` per samplesheet `group` |
 | `mt_chrom` | Name of mitochondrial chromosome (e.g., `"chrM"`) |
 | `dedup` | *Optional*, default `"controls"`: remove PCR duplicates (Picard MarkDuplicates) from IgG controls only. `true` removes them from all samples, `false` from none. A mapping sets it per condition, e.g. `{"default": "controls", "BG4": true}`; the samplesheet `dedup` column overrides both per sample. See [Duplicate Removal](#duplicate-removal) |
-| `minquality` | Minimum mapping quality (MAPQ) for reads used in peak calling, FRiP, coverage correlation and TDF tracks |
+| `minquality` | Minimum mapping quality (MAPQ) for reads used in peak calling, FRiP, coverage correlation, coverage tracks and spike-in counts |
 | `fragment_min`, `fragment_max` | Minimum/maximum fragment length for paired-end alignment (Bowtie2 `-I`/`-X`). Fragments longer than 1000 bp are additionally removed before peak calling |
 | `genome_size` | Genome size for MACS3 peak calling: `"hs"` (human), `"mm"` (mouse), `"ce"` (C. elegans), `"dm"` (Drosophila), or numeric value (e.g., `2.7e9`) |
 | `seacr_qvalue` | Used only when `igg_control` is `false`: SEACR's numeric threshold, i.e. the top fraction of peaks kept by total signal (e.g. `0.01` = top 1%). With IgG, SEACR uses the control bedgraph instead |
@@ -608,6 +612,17 @@ The profile (`profiles/slurm/config.yaml`) handles:
 - `--dryrun` or `-n`: Preview execution without running
 - `--printshellcmds`: Show shell commands (already enabled in profile)
 
+### Running Several Analyses at Once
+
+Give every analysis its own config with its own `outdir`, and launch each as a separate controller job. Snakemake keeps its state (lock, job metadata, SLURM logs) in `outdir/.snakemake`, and all CAWS results and temporary directories are written below `outdir`, so runs do not overwrite each other. If two runs point at the same `outdir` by mistake, the second stops with "Directory cannot be locked".
+
+These can be shared safely between runs:
+- The CAWS code, the SLURM profile, references, indexes and region files, which are only read.
+- The conda environments in `--conda-prefix`. To avoid two runs building the same environment at the same time, create them once before launching several runs: `snakemake --profile profiles/slurm --configfile config.json --conda-create-envs-only`.
+- `$TMPDIR`. Sorting and Picard write uniquely named files there. Several runs that sort large files at the same time share its space, so use a directory on scratch.
+
+Each controller submits up to `jobs` (100) SLURM jobs, so several runs together can reach your account's job limits.
+
 ### Monitoring
 
 Monitor jobs with:
@@ -640,6 +655,7 @@ tail -f logs/rulename/*   # Watch specific rule logs
 - Peak calling with both **SEACR** (stringent) and **MACS3** (narrow or broad peaks); IgG control used by both when enabled. Paired-end samples use actual fragments (`BAMPE`); single-end samples use a fixed 147 bp extension
 - Consensus peaks per condition (ENCODE-style): peaks are called on the pooled replicates of each condition and kept if they overlap peaks in at least `consensus_min_replicates` replicates by at least 50% of either peak. Pooling uses fragments, with single-end reads extended to 147 bp, so conditions can mix single-end and paired-end replicates; IgG controls of the condition's groups are pooled the same way
 - Contamination screening (**FastQ Screen**: *E. coli*, bovine, or any configured genome) and mitochondrial read fraction
+- Coverage tracks normalized to counts per million (CPM, default) or to *E. coli* carry-over spike-in fragments (optional), with spike-in fragments counted for every sample when a spike-in genome is set
 
 ### QC Metrics and Visualization
 - Fragment size distributions (paired-end)
@@ -649,7 +665,7 @@ tail -f logs/rulename/*   # Watch specific rule logs
 - Enrichment over TSSs and user-supplied region sets (e.g. PQS, ATAC peaks): signal profile, reads in regions and peak overlap vs. shuffled peaks, each relative to the matched IgG
 - Library complexity (ENCODE NRF, PBC1, PBC2) with PCR bottleneck grading
 - Signal heatmaps around SEACR peak summits (**deepTools**)
-- CPM-normalized IGV tracks (TDF; fragment coverage for paired-end, read coverage for single-end) and unfiltered bigWig tracks (used for peak heatmaps and TSS enrichment)
+- Normalized coverage tracks from the filtered alignments as TDF (IGV) and bigWig (fragment coverage for paired-end, read coverage for single-end), plus unfiltered, unnormalized bigWig tracks used for the peak heatmaps
 - Interactive HTML dashboard (**flexdashboard**/**Plotly**) with exportable tables
 - **MultiQC** report of FastQC, Trim Galore, Bowtie2, Picard and FastQ Screen results
 - IGV session file that loads all coverage tracks and peak sets
@@ -666,7 +682,7 @@ tail -f logs/rulename/*   # Watch specific rule logs
 output_directory/
 ├── qc/                  # FastQC reports; fastq_screen/ contaminant screens
 ├── trimmed/             # Adapter-trimmed reads
-├── alignments/          # alignment statistics, complexity, fragment lengths, mtDNA counts, bigWigs; units/: Bowtie2 logs per run
+├── alignments/          # alignment statistics, complexity, spike-in counts, fragment lengths, mtDNA counts, unfiltered bigWigs; units/: Bowtie2 logs per run
 ├── dedupalignments/     # BAMs used downstream (deduplicated where dedup applies), Picard metrics, filtered BAMs
 ├── bedalignments/       # Raw-count bedgraphs (SEACR input) and 500 bp binned counts
 ├── peaks/
@@ -677,7 +693,8 @@ output_directory/
 │   ├── enrichment/      # per region set: profile plot, heatmap, matrix and the three enrichment measures
 │   ├── seacr/           # SEACR metrics, peak GC, peak heatmaps
 │   └── macs3/           # MACS3 metrics, peak GC
-├── tdf/                 # IGV TDF coverage tracks, CPM-normalized (one per sample), igv_session.xml
+├── tdf/                 # IGV TDF coverage tracks, normalized (one per sample), igv_session.xml
+├── bigwig/              # the same normalized coverage tracks as bigWig (one per sample)
 ├── reports/             # HTML report, MultiQC report, pipeline_info/ (config, samplesheet, software versions)
 ├── annotations/         # tss.bed; regions/: reference points and merged regions per region set
 └── logs/                # Log files
@@ -689,7 +706,7 @@ output_directory/
 
 **Note on consensus peaks**: `peaks/consensus/{seacr,macs3}/{condition}.consensus.bed` lists, for each consensus peak, the number and names of supporting replicates. Conditions with a single replicate have no consensus peaks.
 
-**Note on TDF tracks**: TDF files are generated from coverage scaled to counts per million filtered fragments (CPM, excluding fragments on `mt_chrom` from the total), so tracks are comparable across samples in IGV. The raw-count bedgraphs in `bedalignments/` are kept for SEACR.
+**Note on coverage tracks**: the TDF and bigWig tracks hold the same coverage of the filtered fragments, scaled to counts per million filtered fragments (CPM, excluding fragments on `mt_chrom` from the total) or, with `normalization: "spikein"`, to fragments per 10,000 spike-in fragments. See [Normalization](#normalization). The raw-count bedgraphs in `bedalignments/` are kept for SEACR. The unfiltered `alignments/{sample}_raw.bw` tracks are not normalized and are used for the peak heatmaps only.
 
 </details>
 
@@ -737,6 +754,7 @@ A separate **MultiQC** report (`reports/multiqc_report.html`) collects the FastQ
 | `NRF`, `PBC1`, `PBC2` | ENCODE library complexity before duplicate removal, after the MAPQ and chromosome filters: NRF = distinct fragments / fragments; PBC1 = positions with exactly one fragment / distinct positions; PBC2 = positions with one / positions with two fragments. A position is a fragment's start and end (paired-end) or a read's 5′ end and strand (single-end) |
 | `PCRBottleneck` | ENCODE grading of PBC1: severe (< 0.5), moderate (0.5–0.8), mild (0.8–0.9), none (≥ 0.9) |
 | `UnalignedFragNum` | Unaligned fragments in the alignments; `0` usually means a BAM that was filtered to aligned reads, in which case alignment rate and contamination cannot be judged |
+| `SpikeinFragNum`, `SpikeinRate` | Only when `spikein_genome` is set: fragments that did not align to the host and align to the spike-in genome (MAPQ ≥ `minquality`, deduplicated when the sample is), and their percentage of `SequencingDepth`. See [Normalization](#normalization) |
 | `UniqueFragNum` | Aligned fragments that are not duplicates, i.e. the number remaining after deduplication (for samples that are not deduplicated, the number that *would* remain) |
 | `<Genome>OnlyRate` | One column per contaminant genome: percentage of screened reads (a subsample of `contaminant_subset` read 1 sequences) that map to that genome and not to the host or any other screened genome (FastQ Screen "one genome" hits) |
 
@@ -752,6 +770,44 @@ A separate **MultiQC** report (`reports/multiqc_report.html`) collects the FastQ
 | `median_gc` | Median GC fraction of the peak sequences |
 
 Consensus peak statistics (`stats/consensus_peaks.txt`) are described under [Consensus Peaks](#consensus-peaks) and enrichment statistics (`stats/region_enrichment.txt`) under [Region Enrichment](#region-enrichment).
+</details>
+
+---
+
+## Normalization
+
+<details>
+<summary><b>Click to expand details</b></summary>
+
+CAWS scales the coverage tracks (`tdf/`, `bigwig/`) and the region signal profiles in one of two ways, set by `normalization`. Peak calling, FRiP, consensus peaks and the other statistics use the unscaled data and are the same in both modes.
+
+**CPM (default).** Coverage is divided by the number of filtered fragments of the sample (excluding `mt_chrom`) and multiplied by one million. This corrects for sequencing depth. It assumes that every library contains about the same total amount of signal, so it shows *where* signal is, relative to the rest of the library. It cannot show a change in the *total* amount of signal. Libraries are amplified and sequenced to similar depths, so a sample in which the target is twice as abundant everywhere looks the same as the untreated sample after CPM.
+
+**Spike-in.** CUT&Tag reactions contain carry-over *E. coli* DNA from the production of pA-Tn5. Its amount depends on the enzyme, not on the sample, so it can serve as a fixed reference. With `normalization: "spikein"`, coverage is multiplied by 10,000 / the number of spike-in fragments of the sample (fragments per 10,000 spike-in fragments, as in the CUT&Tag protocol of Zheng, Ahmad and Henikoff). This keeps global changes. For example, if a G4-stabilizing ligand doubles BG4 signal at all G4s, spike-in scaled tracks show the doubling, while CPM hides most of it and shows an apparent loss of background.
+
+**When to use spike-in normalization:**
+- Treatments or genotypes expected to change the total amount of the target, e.g. G4 ligands with BG4, inhibitors of a histone methyltransferase, or knockdown of the target protein.
+- Only when the samples to be compared had the same number of cells and used the **same batch of pA-Tn5**. Carry-over differs between batches, and different cell numbers change the ratio of human to *E. coli* DNA for technical reasons.
+- Only with enough spike-in fragments. Check `SpikeinFragNum` in `stats/stats.txt` first. Fewer than about 1,000 fragments give noisy scale factors, and CAWS writes a warning to `logs/count_spikein/` for such samples.
+
+Use CPM for questions about *where* the target binds (peak landscapes, region enrichment) and for histone marks without expected global changes. With spike-in normalization, keep in mind that strong competition for pA-Tn5 could also change how efficiently the carry-over DNA is tagmented. An exogenous spike-in, such as a fixed amount of *Drosophila* chromatin added to each reaction, avoids this. Its genome can be given in `contaminant_genomes` and selected as `spikein_genome` in the same way.
+
+**Configuration:**
+
+```json
+"contaminant_genomes": {"Ecoli": "/path/to/ecoli_index"},
+"spikein_genome": "Ecoli",
+"normalization": "spikein"
+```
+
+Setting `spikein_genome` with `"normalization": "cpm"` counts spike-in fragments for every sample (columns `SpikeinFragNum` and `SpikeinRate` in `stats/stats.txt`) without changing the tracks. This shows whether spike-in normalization would be usable before switching it on.
+
+**How spike-in fragments are counted.** The reads of a sample that did not align to the host genome (pairs with neither mate aligned, for paired-end data) are aligned to the spike-in genome with the same Bowtie2 settings as the host. Fragments with MAPQ ≥ `minquality` are counted (paired-end: concordant pairs). Duplicates are removed from the count when the sample is deduplicated, so the spike-in is counted the same way as the host signal it scales. Because only reads that did not align to the host are used, sequences shared by the two genomes are not counted as spike-in. BAM input must contain the unaligned reads, otherwise no spike-in fragments are found, and spike-in normalization stops with an error for that sample.
+
+**Outputs:**
+- `bigwig/{sample}.bw` and `tdf/{sample}.tdf`: normalized coverage tracks (the scale factor used is in `logs/bam_to_bed_pe/` or `logs/bam_to_bed_se/`)
+- `alignments/{sample}.spikein.txt`: spike-in fragment count
+- `stats/stats.txt`: `SpikeinFragNum` and `SpikeinRate`
 </details>
 
 ---
@@ -800,11 +856,11 @@ CAWS measures enrichment of every sample over region sets: the transcription sta
 "enrichment_regions": {"PQS": "/path/to/pqs.bed", "ATAC_K562": "/path/to/K562_atac.narrowPeak"}
 ```
 
-Region files can be BED, BED.gz or narrowPeak; only regions on the chromosomes in `chromosome_file` are used, and chromosome names must match the reference. Each region has a **reference point**: the summit for narrowPeak files, the site itself for single-base regions (such as TSSs, strand-aware), and the centre otherwise.
+Region files can be BED, BED.gz or narrowPeak; only regions on the chromosomes in `chromosome_file` are used, and chromosome names must match the reference. Each region has a **reference point**: the summit for narrowPeak files, the site itself for single-base regions (such as TSSs, strand-aware), and the center otherwise.
 
 **Three measures, for every sample including the IgG controls:**
-1. **Signal profile** – signal ±2 kb around the reference points (deepTools `computeMatrix`, 50 bp bins), plotted as a profile and a heatmap. The profile score is the mean signal within ±400 bp of the reference point divided by the mean signal 1.25–1.75 kb away, averaged over regions (computed from the unfiltered bigWig tracks).
-2. **Reads in regions** – the percentage of filtered fragments overlapping the regions, divided by the percentage of the analysed genome (listed chromosomes minus blacklist) the regions cover. 1 means no enrichment.
+1. **Signal profile** – signal ±2 kb around the reference points (deepTools `computeMatrix`, 50 bp bins), plotted as a profile and a heatmap. The profile score is the mean signal within ±400 bp of the reference point divided by the mean signal 1.25–1.75 kb away, averaged over regions. It is computed from the normalized bigWig tracks, but as a ratio within each sample it does not depend on the normalization. The profile plots and heatmaps show normalized signal, so they can be compared between samples.
+2. **Reads in regions** – the percentage of filtered fragments overlapping the regions, divided by the percentage of the analyzed genome (listed chromosomes minus blacklist) the regions cover. 1 means no enrichment.
 3. **Peak overlap** – the percentage of a sample's SEACR and MACS3 peaks, and of the consensus peaks, overlapping the regions, compared with the same peaks shuffled 10 times within their chromosomes outside the blacklist (fixed random seeds, so results are reproducible). The fold enrichment is observed / mean shuffled overlap.
 
 **Compare with IgG.** pA-Tn5 inserts preferentially into accessible chromatin, especially for low-abundance targets and IgG, so most CUT&Tag samples appear enriched at open-chromatin regions (ATAC peaks, promoters, many PQS). Enrichment of a sample by itself therefore does not separate binding from accessibility bias; the `*_vs_igg` columns divide each measure by that of the sample's matched IgG control (the control of its `group`). Values clearly above 1 indicate enrichment beyond the accessibility background.
@@ -869,7 +925,7 @@ For every experimental condition with at least two replicates, CAWS builds one c
 - **Bowtie2** — Alignment  
 - **SEACR** — CUT&RUN/CUT&Tag peak calling  
 - **MACS3** — Model-based ChIP-seq analysis  
-- **FastQC**, **Trim Galore**, **Picard**, **FastQ Screen**, **samtools**, **bedtools**, **deepTools**, **igvtools**  
+- **FastQC**, **Trim Galore**, **Picard**, **FastQ Screen**, **samtools**, **bedtools**, **deepTools**, **igvtools**, **bedGraphToBigWig** (UCSC)  
 - **R packages** — `tidyverse`, `GenomicRanges`, `Rsamtools`, `plotly`, `flexdashboard`, `DT`  
 
 ---

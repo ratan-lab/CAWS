@@ -28,10 +28,13 @@ done
 check "technical replicates merged (K27me3_rep1: 2 runs)" \
     'awk -F"\t" "\$1 == \"K27me3_rep1\" && \$5 == 2" "$OUT/stats/samples.tsv" | grep -q .'
 check "BAM input used (K27me3_rep2)" 'awk -F"\t" "\$1 == \"K27me3_rep2\" && \$4 == \"BAM\"" "$OUT/stats/samples.tsv" | grep -q .'
+check "spike-in fragments counted for 5 samples" \
+    '[ $(awk -F"\t" "NR == 1 {for (i = 1; i <= NF; i++) if (\$i == \"SpikeinFragNum\") c = i; next} c && \$c > 0" "$OUT/stats/stats.txt" | wc -l) -eq 5 ]'
 check "library complexity (PBC1) for 5 samples" \
     '[ $(awk -F"\t" "NR == 1 {for (i = 1; i <= NF; i++) if (\$i == \"PBC1\") c = i; next} \$c != \"NA\"" "$OUT/stats/stats.txt" | wc -l) -eq 5 ]'
 for s in K27me3_rep1 K27me3_rep2 IgG_PE K27me3_SE IgG_SE; do
     check "$s TDF exists" '[ -s "$OUT/tdf/$s.tdf" ]'
+    check "$s normalized bigWig exists" '[ -s "$OUT/bigwig/$s.bw" ]'
 done
 check "HTML report exists" '[ -s "$OUT/reports/cutntag_analysis_report.html" ]'
 check "deduplication follows dedup setting and samplesheet override" \

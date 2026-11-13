@@ -71,7 +71,20 @@ result <- df1 |>
     select(-UnalignedFragNum) |>
     left_join(df2, by = "Sample") |>
     left_join(complexity, by = "Sample") |>
-    left_join(df1 |> select(Sample, UnalignedFragNum), by = "Sample") |>
+    left_join(df1 |> select(Sample, UnalignedFragNum), by = "Sample")
+
+# spike-in fragments (deduplicated like the host alignments), when spikein_genome is set
+spikein_files <- unlist(snakemake@input[["spikein"]])
+if (length(spikein_files) > 0) {
+    spikein <- spikein_files |>
+        map_dfr(\(f) read_tsv(f, col_types = "d") |> mutate(Sample = sample_of(f, ".spikein.txt"))) |>
+        transmute(Sample, SpikeinFragNum = spikein_fragments)
+    result <- result |>
+        left_join(spikein, by = "Sample") |>
+        mutate(SpikeinRate = paste0(round(SpikeinFragNum * 100.0 / SequencingDepth, 3), "%"))
+}
+
+result <- result |>
     left_join(df3, by = "Sample")
 
 write_tsv(result, file=snakemake@output[[1]])

@@ -126,6 +126,8 @@ config.setdefault("macs3_broad", False)
 config.setdefault("macs3_broad_cutoff", 0.1)
 config.setdefault("consensus_min_replicates", 2)
 config.setdefault("enrichment_regions", {})
+config.setdefault("normalization", "cpm")
+config.setdefault("spikein_genome", "")
 DEDUP_CONFIG = config["dedup"] if isinstance(config["dedup"], dict) else {"default": config["dedup"]}
 DEDUP_DEFAULT = DEDUP_CONFIG.get("default", "controls")
 DEDUP_CONDITIONS = {c: v for c, v in DEDUP_CONFIG.items() if c != "default"}
@@ -150,6 +152,13 @@ if config["igg_control"]:
 assert "contaminant_genomes" in config and "contaminant_subset" in config, \
     "config needs 'contaminant_genomes' and 'contaminant_subset' (these replace 'ecoli_reference'/'ecoli_bt2_idx'; see README)"
 CONTAMINANTS = config["contaminant_genomes"]
+assert config["normalization"] in ("cpm", "spikein"), 'normalization must be "cpm" or "spikein"'
+assert not config["spikein_genome"] or config["spikein_genome"] in CONTAMINANTS, \
+    f'spikein_genome "{config["spikein_genome"]}" must be one of contaminant_genomes: {list(CONTAMINANTS)}'
+assert config["normalization"] == "cpm" or config["spikein_genome"], \
+    'normalization "spikein" needs spikein_genome (e.g. "Ecoli", an entry of contaminant_genomes)'
+SPIKEIN = bool(config["spikein_genome"])          # count spike-in fragments (reported in stats.txt)
+SPIKEIN_NORM = config["normalization"] == "spikein"  # scale tracks by them
 assert CONTAMINANTS, "contaminant_genomes must list at least one genome (e.g. Ecoli)"
 for name, idx in CONTAMINANTS.items():
     assert name != "Host", "'Host' is reserved for the reference genome in contaminant_genomes"
@@ -365,6 +374,7 @@ rule all:
         "stats/region_enrichment.txt",
         "reports/cutntag_analysis_report.html",
         expand("tdf/{sample}.tdf", sample=SAMPLES),
+        expand("bigwig/{sample}.bw", sample=SAMPLES),
         CONSENSUS_FILES,
         "stats/consensus_peaks.txt",
         "reports/multiqc_report.html",
@@ -720,31 +730,103 @@ rule library_complexity:
         chroms=config["chromosome_file"],
         minq=config["minquality"],
         paired=lambda w: "yes" if samplesheet.loc[w.sample, "is_paired"] else "no",
+        flags=lambda w: "-f 0x42 -F 0x904" if samplesheet.loc[w.sample, "is_paired"] else "-F 0x904",
     shell:
         """
-        if [ {params.paired} = yes ]; then
-            # fragment = chromosome, leftmost position, end (from read 1 of proper pairs)
-            samtools view -q {params.minq} -f 0x42 -F 0x904 {input.bam} $(tr '\\n' ' ' < {params.chroms}) \\
-            | awk -v OFS="\\t" '{{s = ($9 > 0) ? $4 : $8; l = ($9 < 0) ? -$9 : $9; print $3, s, s + l}}'
-        else
-            # read = chromosome, 5' end, strand
-            samtools view -q {params.minq} -F 0x904 {input.bam} $(tr '\\n' ' ' < {params.chroms}) \\
-            | awk -v OFS="\\t" '{{
-                if (int($2 / 16) % 2 == 0) {{print $3, $4, "+"; next}}
-                c = $6; len = 0
-                while (match(c, /^[0-9]+[MIDNSHP=X]/)) {{
-                    n = substr(c, 1, RLENGTH - 1); op = substr(c, RLENGTH, 1)
-                    if (op ~ /[MDN=X]/) len += n
-                    c = substr(c, RLENGTH + 1)
-                }}
-                print $3, $4 + len - 1, "-"}}'
-        fi \\
+        samtools view -q {params.minq} {params.flags} {input.bam} $(tr '\\n' ' ' < {params.chroms}) \\
+        | awk -v paired={params.paired} -f {workflow.basedir}/scripts/fragment_keys.awk \\
         | LC_ALL=C sort -S 1G | uniq -c \\
         | awk -v OFS="\\t" '{{n = $1; total += n; distinct++; if (n == 1) m1++; if (n == 2) m2++}}
             END {{print "NRF", "PBC1", "PBC2"
                  if (distinct == 0) {{print "NA", "NA", "NA"; exit}}
                  print sprintf("%.3f", distinct / total), sprintf("%.3f", m1 / distinct), (m2 > 0) ? sprintf("%.2f", m1 / m2) : "NA"}}' \\
         > {output}
+        """
+
+
+# Spike-in (carry-over E. coli DNA from pA-Tn5, or another genome in contaminant_genomes):
+# reads that did not align to the host are aligned to the spike-in genome and counted as
+# fragments, deduplicated like the sample's host alignments.
+rule spikein_reads:
+    input:
+        bam="alignments/{sample}.sorted.bam",
+    output:
+        fq=temp("spikein/{sample}.fq.gz"),
+    log:
+        "logs/spikein_reads/{sample}.log",
+    conda:
+        "envs/samtools.yaml"
+    params:
+        paired=lambda w: "yes" if samplesheet.loc[w.sample, "is_paired"] else "no",
+    shell:
+        """
+        tmp=$(mktemp -d spikein/{wildcards.sample}.XXXXXX)
+        trap 'rm -rf "$tmp"' EXIT
+        if [ {params.paired} = yes ]; then
+            # pairs with neither mate aligned to the host, mates adjacent (interleaved)
+            samtools view -u -f 12 -F 0x900 {input.bam} | samtools collate -u -O - $tmp/collate \\
+            | samtools fastq -n - 2> {log} | gzip > {output.fq}
+        else
+            samtools view -u -f 4 -F 0x900 {input.bam} | samtools fastq -n - 2> {log} | gzip > {output.fq}
+        fi
+        """
+
+rule align_spikein:
+    input:
+        fq="spikein/{sample}.fq.gz",
+    output:
+        sam=temp("spikein/{sample}.sam"),
+    log:
+        "logs/align_spikein/{sample}.log",
+    conda:
+        "envs/bowtie.yaml"
+    threads: 4
+    params:
+        aln="--local" if config["trim_adapters"] else "--end-to-end",
+        idx=CONTAMINANTS.get(config["spikein_genome"], ""),
+        reads=lambda w: (f"--no-mixed --no-discordant -I {config['fragment_min']} -X {config['fragment_max']} --interleaved"
+                         if samplesheet.loc[w.sample, "is_paired"] else "-U"),
+    shell:
+        """
+        if [ $(gzip -dc {input.fq} | wc -l) -eq 0 ]; then
+            echo "no reads unaligned to the host (BAM input without unmapped reads?)" > {log}
+            touch {output.sam}
+        else
+            bowtie2 {params.aln} --very-sensitive --phred33 -p {threads} -x {params.idx} \\
+                {params.reads} {input.fq} -S {output.sam} 2> {log}
+        fi
+        """
+
+rule count_spikein:
+    input:
+        sam="spikein/{sample}.sam",
+    output:
+        "alignments/{sample}.spikein.txt",
+    log:
+        "logs/count_spikein/{sample}.log",
+    conda:
+        "envs/samtools.yaml"
+    params:
+        minq=config["minquality"],
+        paired=lambda w: "yes" if samplesheet.loc[w.sample, "is_paired"] else "no",
+        flags=lambda w: "-f 0x42 -F 0x904" if samplesheet.loc[w.sample, "is_paired"] else "-F 0x904",
+        dedup=lambda w: "yes" if DEDUP[w.sample] else "no",
+        required="yes" if SPIKEIN_NORM else "no",
+    shell:
+        """
+        n=0
+        if [ -s {input.sam} ]; then
+            n=$(samtools view -q {params.minq} {params.flags} {input.sam} \\
+                | awk -v paired={params.paired} -f {workflow.basedir}/scripts/fragment_keys.awk \\
+                | if [ {params.dedup} = yes ]; then LC_ALL=C sort -u -S 1G; else cat; fi | wc -l)
+        fi
+        printf "spikein_fragments\\n%s\\n" $n > {output}
+        if [ $n -eq 0 ] && [ {params.required} = yes ]; then
+            echo "ERROR: no spike-in fragments for {wildcards.sample}; spike-in normalization is not possible (use normalization cpm)" >&2
+            exit 1
+        elif [ $n -lt 1000 ]; then
+            echo "WARNING: only $n spike-in fragments for {wildcards.sample}; spike-in scale factors will be noisy" > {log}
+        fi
         """
 
 
@@ -834,6 +916,7 @@ rule report_on_alignments:
         mtn=expand("alignments/{sample}.mtdna.txt", sample=SAMPLES),
         dup=expand("dedupalignments/{sample}.rmdup.txt", sample=SAMPLES),
         screen=expand("qc/fastq_screen/{sample}_screen.txt", sample=SAMPLES),
+        spikein=expand("alignments/{sample}.spikein.txt", sample=SAMPLES) if SPIKEIN else [],
     output:
         "stats/stats.txt",
     log:
@@ -879,13 +962,14 @@ rule bam_to_bed_pe:
         blklist=config["blacklist"],
         bai="dedupalignments/{sample}.sorted.bam.bai",
         bam="dedupalignments/{sample}.sorted.bam",
+        spikein=lambda w: f"alignments/{w.sample}.spikein.txt" if SPIKEIN_NORM else [],
     output:
         bam=temp("{sample}.name.bam"),
         qbam="dedupalignments/{sample}.sorted.qflt.bam",
         qbai="dedupalignments/{sample}.sorted.qflt.bam.bai",
         bed=temp("bedalignments/{sample}.bed"),
         bedgraph="bedalignments/{sample}.bedgraph",
-        cpm_bedgraph=temp("bedalignments/{sample}.cpm.bedgraph"),
+        norm_bedgraph=temp("bedalignments/{sample}.norm.bedgraph"),
         binbed="bedalignments/{sample}.bin.bed",
         fragments=temp("bedalignments/{sample}.fragments.bed"),
     wildcard_constraints:
@@ -924,10 +1008,16 @@ rule bam_to_bed_pe:
         bedtools genomecov -bg -i {output.bed} \
             -g <(cut -f 1,2 {input.fai}) > {output.bedgraph}
 
-        # CPM-scaled coverage (per million filtered, non-mitochondrial fragments) for TDF tracks
-        scale=$(awk -v mt="{params.mt}" '$1 != mt {{n++}} END {{print (n > 0) ? 1000000/n : 0}}' {output.bed})
+        # normalized coverage for the TDF and bigWig tracks: per million filtered, non-mitochondrial
+        # fragments (CPM), or per 10,000 spike-in fragments (normalization: spikein)
+        if [ -n "{input.spikein}" ]; then
+            scale=$(awk 'NR == 2 {{print 10000 / $1}}' {input.spikein})
+        else
+            scale=$(awk -v mt="{params.mt}" '$1 != mt {{n++}} END {{print (n > 0) ? 1000000/n : 0}}' {output.bed})
+        fi
+        echo "scale factor: $scale" > {log}
         bedtools genomecov -bg -scale $scale -i {output.bed} \
-            -g <(cut -f 1,2 {input.fai}) > {output.cpm_bedgraph}
+            -g <(cut -f 1,2 {input.fai}) > {output.norm_bedgraph}
 
         awk -v w=500 '{{print $1, int(($2 + $3)/(2*w))*w + w/2}}' {output.bed} \
         | sort -k1,1V -k2,2n \
@@ -942,13 +1032,14 @@ rule bam_to_bed_se:
         blklist=config["blacklist"],
         bai="dedupalignments/{sample}.sorted.bam.bai",
         bam="dedupalignments/{sample}.sorted.bam",
+        spikein=lambda w: f"alignments/{w.sample}.spikein.txt" if SPIKEIN_NORM else [],
     output:
         bam=temp("{sample}.name.bam"),
         qbam="dedupalignments/{sample}.sorted.qflt.bam",
         qbai="dedupalignments/{sample}.sorted.qflt.bam.bai",
         bed=temp("bedalignments/{sample}.bed"),
         bedgraph="bedalignments/{sample}.bedgraph",
-        cpm_bedgraph=temp("bedalignments/{sample}.cpm.bedgraph"),
+        norm_bedgraph=temp("bedalignments/{sample}.norm.bedgraph"),
         binbed="bedalignments/{sample}.bin.bed",
         fragments=temp("bedalignments/{sample}.fragments.bed"),
     wildcard_constraints:
@@ -990,10 +1081,16 @@ rule bam_to_bed_se:
         bedtools genomecov -bg -i {output.bed} \
             -g <(cut -f 1,2 {input.fai}) > {output.bedgraph}
 
-        # CPM-scaled coverage (per million filtered, non-mitochondrial fragments) for TDF tracks
-        scale=$(awk -v mt="{params.mt}" '$1 != mt {{n++}} END {{print (n > 0) ? 1000000/n : 0}}' {output.bed})
+        # normalized coverage for the TDF and bigWig tracks: per million filtered, non-mitochondrial
+        # fragments (CPM), or per 10,000 spike-in fragments (normalization: spikein)
+        if [ -n "{input.spikein}" ]; then
+            scale=$(awk 'NR == 2 {{print 10000 / $1}}' {input.spikein})
+        else
+            scale=$(awk -v mt="{params.mt}" '$1 != mt {{n++}} END {{print (n > 0) ? 1000000/n : 0}}' {output.bed})
+        fi
+        echo "scale factor: $scale" > {log}
         bedtools genomecov -bg -scale $scale -i {output.bed} \
-            -g <(cut -f 1,2 {input.fai}) > {output.cpm_bedgraph}
+            -g <(cut -f 1,2 {input.fai}) > {output.norm_bedgraph}
 
         awk -v w=500 '{{print $1, int(($2 + $3)/(2*w))*w + w/2}}' {output.bed} \
         | sort -k1,1V -k2,2n \
@@ -1344,7 +1441,7 @@ rule prepare_regions:
 rule region_profile:
     input:
         points="annotations/regions/{region}.points.bed",
-        bw=expand("alignments/{sample}_raw.bw", sample=SAMPLES),
+        bw=expand("bigwig/{sample}.bw", sample=SAMPLES),
     output:
         matrix="stats/enrichment/{region}_matrix.gz",
         score="stats/enrichment/{region}_profile_score.txt",
@@ -1358,14 +1455,15 @@ rule region_profile:
     params:
         labels=" ".join(SAMPLES),
         colors=" ".join(f"'{OKABE_ITO[i % len(OKABE_ITO)]}'" for i in range(len(SAMPLES))),
+        ylabel="Mean signal per 10,000 spike-in fragments" if SPIKEIN_NORM else "Mean CPM",
     shell:
         """
         computeMatrix reference-point -S {input.bw} -R {input.points} --samplesLabel {params.labels} \\
-            --referencePoint center -a 2000 -b 2000 --binSize 50 --skipZeros \\
+            --referencePoint center -a 2000 -b 2000 --binSize 50 --skipZeros --missingDataAsZero \\
             -o {output.matrix} -p {threads} 2> {log}
         plotProfile -m {output.matrix} -out {output.profile} --averageType mean --perGroup \\
             --colors {params.colors} --refPointLabel "{wildcards.region}" \\
-            --plotTitle "{wildcards.region}" --yAxisLabel "Mean coverage" 2>> {log}
+            --plotTitle "{wildcards.region}" --yAxisLabel "{params.ylabel}" 2>> {log}
         plotHeatmap -m {output.matrix} -out {output.heatmap} --colorMap viridis \\
             --refPointLabel "{wildcards.region}" --regionsLabel "{wildcards.region}" 2>> {log}
         python3 {workflow.basedir}/scripts/calculate_profile_enrichment.py {output.matrix} {output.score} >> {log} 2>&1
@@ -1554,7 +1652,7 @@ ruleorder: convert_to_binary > import_bam
 
 rule bedgraph_to_tdf:
     input:
-        bedgraph="bedalignments/{sample}.cpm.bedgraph",
+        bedgraph="bedalignments/{sample}.norm.bedgraph",
     output:
         tdf="tdf/{sample}.tdf",
     log:
@@ -1566,6 +1664,25 @@ rule bedgraph_to_tdf:
     shell:
         """
         igvtools toTDF {input.bedgraph} {output.tdf} {params.igv_genome} 2> {log}
+        """
+
+rule normalized_bigwig:
+    input:
+        bedgraph="bedalignments/{sample}.norm.bedgraph",
+        fai=config["reference_fai"],
+    output:
+        "bigwig/{sample}.bw",
+    log:
+        "logs/normalized_bigwig/{sample}.log",
+    conda:
+        "envs/ucsc.yaml"
+    shell:
+        """
+        tmp=$(mktemp -d bigwig/{wildcards.sample}.XXXXXX)
+        trap 'rm -rf "$tmp"' EXIT
+        LC_ALL=C sort -k1,1 -k2,2n {input.bedgraph} > $tmp/coverage.bedgraph
+        cut -f 1,2 {input.fai} > $tmp/chrom.sizes
+        bedGraphToBigWig $tmp/coverage.bedgraph $tmp/chrom.sizes {output} 2> {log}
         """
 
 ruleorder: bam_to_bed_pe > bam_to_bed_se

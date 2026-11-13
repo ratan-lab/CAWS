@@ -152,5 +152,15 @@ set-resources:
     mem_mb: 8000
     runtime: "120m"
 
+  align_spikein:
+    threads: 4
+    mem_mb: 8000
+    runtime: "120m"
+
+  normalized_bigwig:
+    threads: 1
+    mem_mb: 8000
+    runtime: "60m"
+
 # SLURM executor plugin configuration
 slurm-status-command: sacct  # Force sacct instead of squeue for job status
