@@ -150,7 +150,7 @@ if config["igg_control"]:
 
 # validate contaminant genomes screened with FastQ Screen
 assert "contaminant_genomes" in config and "contaminant_subset" in config, \
-    "config needs 'contaminant_genomes' and 'contaminant_subset' (these replace 'ecoli_reference'/'ecoli_bt2_idx'; see README)"
+    "config needs 'contaminant_genomes' and 'contaminant_subset' (these replace 'ecoli_reference'/'ecoli_bt2_idx'; see docs/configuration.md)"
 CONTAMINANTS = config["contaminant_genomes"]
 assert config["normalization"] in ("cpm", "spikein"), 'normalization must be "cpm" or "spikein"'
 assert not config["spikein_genome"] or config["spikein_genome"] in CONTAMINANTS, \

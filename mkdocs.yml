@@ -1,0 +1,60 @@
+site_name: CAWS
+site_description: CUT&Tag Analysis Workflow System, a Snakemake pipeline for CUT&Tag data
+site_url: https://caws.readthedocs.io/
+repo_url: https://github.com/ratan-lab/CAWS
+repo_name: ratan-lab/CAWS
+edit_uri: edit/main/docs/
+strict: true
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+markdown_extensions:
+  - tables
+  - attr_list
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+exclude_docs: |
+  make_workflow_svg.py
+  requirements.txt
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: installation.md
+      - Quick start: quickstart.md
+      - "Tutorial: H3K4me3": tutorial.md
+  - Usage:
+      - Configuration: configuration.md
+      - Running on SLURM: slurm.md
+      - Outputs: outputs.md
+      - QC metrics: qc-metrics.md
+  - Methods:
+      - Duplicate removal: duplicate-removal.md
+      - Normalization: normalization.md
+      - Region enrichment: region-enrichment.md
+      - Consensus peaks: consensus-peaks.md
+      - Peak width analysis: peak-widths.md
+  - Troubleshooting: troubleshooting.md
+  - Contributing: https://github.com/ratan-lab/CAWS/blob/main/CONTRIBUTING.md

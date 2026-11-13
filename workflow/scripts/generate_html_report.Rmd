@@ -747,7 +747,7 @@ if (nrow(region_enrichment) > 0) {
   create_enhanced_datatable(
     region_enrichment,
     filename_prefix = "region_enrichment",
-    caption = "Enrichment over TSSs and user-supplied region sets (see README, Region Enrichment)"
+    caption = "Enrichment over TSSs and user-supplied region sets (see the CAWS documentation, Region enrichment)"
   )
 } else {
   div(class = "alert alert-info", "No region sets: provide gtf_file and/or enrichment_regions in the configuration")
