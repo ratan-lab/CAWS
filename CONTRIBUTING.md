@@ -18,6 +18,7 @@ Open an issue at https://github.com/ratan-lab/CAWS/issues. For bugs, please incl
    - Tools used by rules go in a conda environment under `workflow/envs/`, with pinned versions.
    - New configuration options need a default in `config.json` and an entry in the README configuration table.
    - R code follows tidyverse style with the native `|>` pipe.
+   - If the change adds or removes a pipeline step, update the content lists in `docs/make_workflow_svg.py` and regenerate the README figure with `python3 docs/make_workflow_svg.py docs/workflow.svg`.
 3. Run the test dataset locally (see "Testing the Installation" in the README):
    ```bash
    conda run -n caws-setup bash .test/setup.sh

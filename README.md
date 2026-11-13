@@ -12,6 +12,8 @@
 
 **CAWS (CUT&Tag Analysis Workflow System)** is a comprehensive Snakemake pipeline for analyzing CUT&Tag (Cleavage Under Targets and Tagmentation) sequencing data. CUT&Tag is an epigenomic profiling method that maps protein–DNA interactions and histone modifications in situ, with lower background and fewer cells than ChIP-seq (Kaya-Okur et al., 2019).  
 
+![CAWS workflow: inputs, processing, coverage tracks and peak calling, quality control, and outputs](docs/workflow.svg)
+
 ---
 
 ## Why Use CAWS?
