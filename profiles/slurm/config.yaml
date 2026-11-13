@@ -18,7 +18,7 @@ quiet:
 
 # Default resources for all rules
 default-resources:
-  - runtime=180        # minutes
+  - runtime=180m        # minutes (always give a unit: Snakemake 9 reads a bare number as seconds)
   - mem_mb=9000
   - threads=1
   - slurm_account=     # TODO: Set your allocation name (e.g., ratan-lab)
@@ -30,127 +30,127 @@ set-resources:
   check_quality_pe:
     threads: 2
     mem_mb: 4000
-    runtime: 60
+    runtime: "60m"
 
   check_quality_se:
     threads: 2
     mem_mb: 4000
-    runtime: 60
+    runtime: "60m"
 
   trim_adapters_pe:
     threads: 4
     mem_mb: 8000
-    runtime: 480
+    runtime: "480m"
 
   trim_adapters_se:
     threads: 4
     mem_mb: 8000
-    runtime: 480
+    runtime: "480m"
 
   align_reads_pe:
     threads: 8
     mem_mb: 30000
-    runtime: 1400
+    runtime: "1400m"
 
   align_reads_se:
     threads: 8
     mem_mb: 30000
-    runtime: 1400
+    runtime: "1400m"
  
   convert_to_binary:
     threads: 2
     mem_mb: 8000
-    runtime: 120
+    runtime: "120m"
 
   screen_contaminants:
     threads: 4
     mem_mb: 12000
-    runtime: 240
+    runtime: "240m"
 
   bam_to_bed_pe:
     threads: 2
     mem_mb: 8000
-    runtime: 180
+    runtime: "180m"
 
   bam_to_bed_se:
     threads: 2
     mem_mb: 8000
-    runtime: 180
+    runtime: "180m"
 
   remove_duplicates:
     threads: 2
     mem_mb: 12000
-    runtime: 240
+    runtime: "240m"
 
   call_seacr_peaks:
     threads: 1
     mem_mb: 8000
-    runtime: 120
+    runtime: "120m"
 
   assess_peaks:
     threads: 2
     mem_mb: 12000
-    runtime: 180
+    runtime: "180m"
 
   assess_macs_peaks:
     threads: 2
     mem_mb: 12000
-    runtime: 180
+    runtime: "180m"
 
   make_peak_heatmap:
     threads: 2
     mem_mb: 12000
-    runtime: 180
+    runtime: "180m"
 
   region_profile:
     threads: 4
     mem_mb: 12000
-    runtime: 180
+    runtime: "180m"
 
   generate_html_report:
     threads: 1
     mem_mb: 8000
-    runtime: 120
+    runtime: "120m"
 
   pool_replicates:
     threads: 2
     mem_mb: 8000
-    runtime: 120
+    runtime: "120m"
 
   call_seacr_pooled:
     threads: 1
     mem_mb: 12000
-    runtime: 180
+    runtime: "180m"
 
   call_macs_pooled:
     threads: 1
     mem_mb: 16000
-    runtime: 240
+    runtime: "240m"
 
   multiqc:
     threads: 1
     mem_mb: 8000
-    runtime: 60
+    runtime: "60m"
 
   region_reads:
     threads: 1
     mem_mb: 12000
-    runtime: 240
+    runtime: "240m"
 
   region_peaks:
     threads: 1
     mem_mb: 8000
-    runtime: 120
+    runtime: "120m"
 
   library_complexity:
     threads: 1
     mem_mb: 8000
-    runtime: 120
+    runtime: "120m"
 
   merge_units:
     threads: 2
     mem_mb: 8000
-    runtime: 120
+    runtime: "120m"
 
 # SLURM executor plugin configuration
 slurm-status-command: sacct  # Force sacct instead of squeue for job status

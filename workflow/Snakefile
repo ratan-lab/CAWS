@@ -631,12 +631,13 @@ rule remove_duplicates:
         dedup_sample=lambda w: "yes" if DEDUP[w.sample] else "no",
     shell:
         """
+        # Picard (Java) ignores TMPDIR; put its spill files in the job's tmpdir rather than the node's /tmp
         mkdir -p dedupalignments
         if [ {params.dedup_sample} = yes ]; then
-            picard MarkDuplicates -I {input.bam} -O {output.bam} -METRICS_FILE {output.metrics} -REMOVE_DUPLICATES true 2> {log}
+            picard MarkDuplicates -I {input.bam} -O {output.bam} -METRICS_FILE {output.metrics} -REMOVE_DUPLICATES true -TMP_DIR {resources.tmpdir} 2> {log}
         else
             # duplication metrics only; downstream steps use the alignments unchanged
-            picard MarkDuplicates -I {input.bam} -O /dev/null -METRICS_FILE {output.metrics} 2> {log}
+            picard MarkDuplicates -I {input.bam} -O /dev/null -METRICS_FILE {output.metrics} -TMP_DIR {resources.tmpdir} 2> {log}
             cp {input.bam} {output.bam}
         fi
         """

@@ -94,7 +94,7 @@ Edit `profiles/slurm/config.yaml` to set your SLURM allocation and partition:
 
 ```yaml
 default-resources:
-  - runtime=180
+  - runtime=180m        # always give a unit: a bare number is read as seconds
   - mem_mb=9000
   - threads=1
   - slurm_account=your-allocation-name  # e.g., ratan
@@ -217,6 +217,7 @@ snakemake --profile profiles/slurm --configfile config.json
 - `--jobs` overrides the profile's limit on concurrent SLURM jobs (100)
 - `--notemp` can be added to preserve temporary files for debugging
 - Use absolute paths if running from a different directory
+- Temporary files (sorting, Picard) go to `$TMPDIR` as set where `snakemake` is launched, and that path is passed to every job. Point it at a directory on shared scratch that the compute nodes can see, e.g. `export TMPDIR=/scratch/$USER/tmp` (after `mkdir -p`) before the `snakemake` command, or set it with `--default-resources tmpdir=/scratch/$USER/tmp`. The node-local `/tmp` works but is often small; a directory that exists only where `snakemake` runs (e.g. a per-job directory of the controller job) makes jobs fail
 
 ---
 
@@ -540,7 +541,7 @@ Start from the template `config.json` in the repository. Keys marked *optional* 
 Edit `profiles/slurm/config.yaml` to set your allocation and partition in the `default-resources` section:
 ```yaml
 default-resources:
-  - runtime=180
+  - runtime=180m        # always give a unit: a bare number is read as seconds
   - mem_mb=9000
   - threads=1
   - slurm_account=your-allocation-name  # e.g., ratan
@@ -923,7 +924,7 @@ snakemake --cores 8 --use-conda --configfile config.json
 set-resources:
   rule_name:
     mem_mb: 40000      # Increase memory
-    runtime: 600       # Increase time (minutes)
+    runtime: "600m"    # Increase time (always give a unit, e.g. "600m" or "10h")
 ```
 
 ### Empty Peak Files
