@@ -463,8 +463,8 @@ rule trim_adapters_pe:
         r1=lambda w: units.loc[w.unit, "read1"],
         r2=lambda w: units.loc[w.unit, "read2"],
     output:
-        out1="trimmed/{unit}_val_1.fq.gz",
-        out2="trimmed/{unit}_val_2.fq.gz",
+        out1=temp("trimmed/{unit}_val_1.fq.gz"),
+        out2=temp("trimmed/{unit}_val_2.fq.gz"),
     wildcard_constraints:
         unit=constraint(FASTQ_PE_UNITS, "NO_PE_UNITS"),
     log:
@@ -489,7 +489,7 @@ rule trim_adapters_se:
     input:
         r1=lambda w: units.loc[w.unit, "read1"],
     output:
-        out1="trimmed/{unit}_trimmed.fq.gz",
+        out1=temp("trimmed/{unit}_trimmed.fq.gz"),
     wildcard_constraints:
         unit=constraint(FASTQ_SE_UNITS, "NO_SE_UNITS"),
     log:
@@ -943,11 +943,11 @@ rule fragment_size:
         "envs/samtools.yaml"
     shell:
         """
-        # Extract insert sizes for paired-end only
-        samtools view -f 1 -F 0x04 {input} \
+        # one insert size per fragment: read 1 of properly paired, primary alignments
+        samtools view -f 0x42 -F 0x904 {input} \
         | awk -F"\\t" 'function abs(x){{return ((x < 0.0) ? -x : x)}} {{print abs($9)}}' \
         | sort -n | uniq -c \
-        | awk -v OFS="\\t" '{{print $2, $1/2}}' > {output}
+        | awk -v OFS="\\t" '{{print $2, $1}}' > {output}
         """
 
 
@@ -964,7 +964,7 @@ rule bam_to_bed_pe:
         bam="dedupalignments/{sample}.sorted.bam",
         spikein=lambda w: f"alignments/{w.sample}.spikein.txt" if SPIKEIN_NORM else [],
     output:
-        bam=temp("{sample}.name.bam"),
+        bam=temp("bedalignments/{sample}.name.bam"),
         qbam="dedupalignments/{sample}.sorted.qflt.bam",
         qbai="dedupalignments/{sample}.sorted.qflt.bam.bai",
         bed=temp("bedalignments/{sample}.bed"),
@@ -1034,7 +1034,7 @@ rule bam_to_bed_se:
         bam="dedupalignments/{sample}.sorted.bam",
         spikein=lambda w: f"alignments/{w.sample}.spikein.txt" if SPIKEIN_NORM else [],
     output:
-        bam=temp("{sample}.name.bam"),
+        bam=temp("bedalignments/{sample}.name.bam"),
         qbam="dedupalignments/{sample}.sorted.qflt.bam",
         qbai="dedupalignments/{sample}.sorted.qflt.bam.bai",
         bed=temp("bedalignments/{sample}.bed"),
@@ -1199,9 +1199,9 @@ rule call_macs_peaks_pe:
     shell:
         """
         if [ {params.has_igg} == True ]; then
-           macs3 callpeak -t {input.exp} -c {input.con} -f BAMPE -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} {params.mode} --keep-dup all -B --SPMR -q {config[macs3_qvalue_with_control]} 2> {log} || true
+           macs3 callpeak -t {input.exp} -c {input.con} -f BAMPE -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} {params.mode} --keep-dup all -q {config[macs3_qvalue_with_control]} 2> {log} || true
         else
-           macs3 callpeak -t {input.exp} -f BAMPE -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} {params.mode} --keep-dup all -B --SPMR -q {config[macs3_qvalue_no_control]} --nolambda 2> {log} || true
+           macs3 callpeak -t {input.exp} -f BAMPE -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} {params.mode} --keep-dup all -q {config[macs3_qvalue_no_control]} --nolambda 2> {log} || true
         fi
         if [ ! -f {output.npeaks} ]; then
             touch {output.npeaks}
@@ -1231,9 +1231,9 @@ rule call_macs_peaks_se:
     shell:
         """
         if [ {params.has_igg} == True ]; then
-           macs3 callpeak -t {input.exp} -c {input.con} -f BAM --nomodel --extsize 147 -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} {params.mode} --keep-dup all -B --SPMR -q {config[macs3_qvalue_with_control]} 2> {log} || true
+           macs3 callpeak -t {input.exp} -c {input.con} -f BAM --nomodel --extsize 147 -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} {params.mode} --keep-dup all -q {config[macs3_qvalue_with_control]} 2> {log} || true
         else
-           macs3 callpeak -t {input.exp} -f BAM --nomodel --extsize 147 -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} {params.mode} --keep-dup all -B --SPMR -q {config[macs3_qvalue_no_control]} --nolambda 2> {log} || true
+           macs3 callpeak -t {input.exp} -f BAM --nomodel --extsize 147 -g {config[genome_size]} -n "{params.prefix}" --outdir {params.dir} {params.mode} --keep-dup all -q {config[macs3_qvalue_no_control]} --nolambda 2> {log} || true
         fi
         if [ ! -f {output.npeaks} ]; then
             touch {output.npeaks}
@@ -1310,25 +1310,9 @@ rule consolidate_stats:
     script:
         "scripts/consolidate_stats.R"
 
-rule create_bigwig:
-    input:
-        bam="dedupalignments/{sample}.sorted.bam",
-        bai="dedupalignments/{sample}.sorted.bam.bai",
-    output:
-        bw="alignments/{sample}_raw.bw",
-    log:
-        "logs/create_bigwig/{sample}.log",
-    conda:
-        "envs/deeptools.yaml"
-    threads: 2
-    shell:
-        """
-        bamCoverage -b {input.bam} -o {output.bw}
-        """
-
 rule make_peak_heatmap:
     input:
-        bw="alignments/{sample}_raw.bw",
+        bw="bigwig/{sample}.bw",
         peaks="peaks/seacr/{sample}.peaks.stringent.bed",
     output:
         peaks=temp("peaks/seacr/{sample}.peaks.summitRegion.bed"),
@@ -1349,7 +1333,7 @@ rule make_peak_heatmap:
             computeMatrix reference-point \
               -S {input.bw} \
               -R {output.peaks} \
-              --skipZeros \
+              --skipZeros --missingDataAsZero \
               -o {output.mat} -p {threads} -a {config[heatmap_window]} -b {config[heatmap_window]} \
               --referencePoint center
 

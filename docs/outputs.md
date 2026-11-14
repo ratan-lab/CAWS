@@ -5,8 +5,8 @@
 ```
 output_directory/
 ├── qc/                  # FastQC reports; fastq_screen/ contaminant screens
-├── trimmed/             # Adapter-trimmed reads
-├── alignments/          # alignment statistics, complexity, spike-in counts, fragment lengths, mtDNA counts, unfiltered bigWigs; units/: Bowtie2 logs per run
+├── trimmed/             # Trim Galore reports (the trimmed reads are temporary)
+├── alignments/          # alignment statistics, complexity, spike-in counts, fragment lengths, mtDNA counts; units/: Bowtie2 logs per run
 ├── dedupalignments/     # BAMs used downstream (deduplicated where dedup applies), Picard metrics, filtered BAMs
 ├── bedalignments/       # Raw-count bedgraphs (SEACR input) and 500 bp binned counts
 ├── peaks/
@@ -24,13 +24,13 @@ output_directory/
 └── logs/                # Log files
 ```
 
-**Note on alignments**: every sample has its BAM in `dedupalignments/`: deduplicated where `dedup` applies, otherwise an unchanged copy of the alignments. The raw `alignments/{sample}.sorted.bam` (and index) are temporary and removed once all steps that use them have finished; run with `--notemp` to keep them.
+**Note on alignments**: every sample has its BAM in `dedupalignments/`: deduplicated where `dedup` applies, otherwise an unchanged copy of the alignments. The raw `alignments/{sample}.sorted.bam` (and index) are temporary and removed once all steps that use them have finished; run with `--notemp` to keep them. The same applies to the adapter-trimmed reads in `trimmed/`.
 
 **Note on IGV sessions**: open `tdf/igv_session.xml` in IGV (File → Open Session) to load the TDF tracks of all samples (experimental samples grouped by condition, then controls), the consensus peaks and the per-sample peak calls. Paths are relative, so keep the output directory layout when copying it.
 
 **Note on consensus peaks**: `peaks/consensus/{seacr,macs3}/{condition}.consensus.bed` lists, for each consensus peak, the number and names of supporting replicates. Conditions with a single replicate have no consensus peaks.
 
-**Note on coverage tracks**: the TDF and bigWig tracks hold the same coverage of the filtered fragments, scaled to counts per million filtered fragments (CPM, excluding fragments on `mt_chrom` from the total) or, with `normalization: "spikein"`, to fragments per 10,000 spike-in fragments. See [Normalization](normalization.md). The raw-count bedgraphs in `bedalignments/` are kept for SEACR. The unfiltered `alignments/{sample}_raw.bw` tracks are not normalized and are used for the peak heatmaps only.
+**Note on coverage tracks**: the TDF and bigWig tracks hold the same coverage of the filtered fragments, scaled to counts per million filtered fragments (CPM, excluding fragments on `mt_chrom` from the total) or, with `normalization: "spikein"`, to fragments per 10,000 spike-in fragments. See [Normalization](normalization.md). The raw-count bedgraphs in `bedalignments/` are kept for SEACR. The SEACR peak heatmaps in `stats/seacr/` and the region profiles use the bigWig tracks.
 
 ## Interactive HTML report
 

@@ -50,7 +50,7 @@ CAWS is designed for:
 - Enrichment over TSSs and user-supplied region sets (e.g. PQS, ATAC peaks): signal profile, reads in regions and peak overlap vs. shuffled peaks, each relative to the matched IgG
 - Library complexity (ENCODE NRF, PBC1, PBC2) with PCR bottleneck grading
 - Signal heatmaps around SEACR peak summits (**deepTools**)
-- Normalized coverage tracks from the filtered alignments as TDF (IGV) and bigWig (fragment coverage for paired-end, read coverage for single-end), plus unfiltered, unnormalized bigWig tracks used for the peak heatmaps
+- Normalized coverage tracks from the filtered alignments as TDF (IGV) and bigWig (fragment coverage for paired-end, read coverage for single-end)
 - Interactive HTML dashboard (**flexdashboard**/**Plotly**) with exportable tables
 - **MultiQC** report of FastQC, Trim Galore, Bowtie2, Picard and FastQ Screen results
 - IGV session file that loads all coverage tracks and peak sets
