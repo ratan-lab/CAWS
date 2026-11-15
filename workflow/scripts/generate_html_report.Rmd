@@ -103,6 +103,12 @@ consolidated <- read_data(get_abs_path(as.character(snakemake@input[["consolidat
 consensus <- read_data(get_abs_path(as.character(snakemake@input[["consensus"]])))
 # one row per sample: sampleID, condition, group, input, units, layout, deduplicated
 samplesheet <- read_data(get_abs_path(as.character(snakemake@input[["samples"]])))
+# plots show each sample's label (samplesheet label column, sampleID by default)
+sample_labels <- samplesheet |> transmute(sampleID, label = as.character(label)) |> deframe()
+label_of <- function(ids) coalesce(unname(sample_labels[ids]), ids)
+
+# square heatmap sized to the number of samples (px)
+heatmap_size <- function(n) min(1600, max(600, 250 + 24 * n))
 # enrichment over region sets (TSS and enrichment_regions)
 region_enrichment <- read_data(get_abs_path(as.character(snakemake@input[["regions"]])))
 tss_enrichment <- region_enrichment |>
@@ -193,7 +199,7 @@ create_alignment_barplot <- function(stats_data, sample_data) {
   alignment_data <- stats_data |>
     left_join(sample_data, by = c("Sample" = "sampleID")) |>
     select(Sample, all_of(rate_cols)) |>
-    mutate(across(-Sample, parse_percentage)) |>
+    mutate(across(-Sample, parse_percentage), Sample = label_of(Sample)) |>
     pivot_longer(
       cols = -Sample,
       names_to = "metric",
@@ -255,7 +261,7 @@ load_file_data <- function(dir, pattern, process_func) {
 process_fragment_file <- function(file_path) {
   sample_name <- str_remove(basename(file_path), ".fraglengths.txt")
   read_delim(file_path, col_names = c("fragment_length", "fragment_count"), show_col_types = FALSE) |>
-    mutate(sample_name = sample_name)
+    mutate(sample_name = label_of(sample_name))
 }
 
 # Function to create fragment length plot
@@ -292,15 +298,12 @@ frag_data <- frag_files |>
     tryCatch(process_fragment_file(.x), error = function(e) tibble())
   })
 frag_plot <- create_fragment_plot(frag_data)
+# vertical legend on the right: scrolls instead of covering the plot when there are many samples
 ggplotly(frag_plot) |>
   layout(
     title = list(text = "Fragment Length Distribution", font = list(size = 16)),
     showlegend = TRUE,
-    legend = list(
-      orientation = "h",
-      x = 0.5,
-      xanchor = "center"
-    )
+    legend = list(orientation = "v", x = 1.02, y = 1, font = list(size = 10))
   )
 ```
 
@@ -316,7 +319,7 @@ process_coverage_files <- function(coverage_files) {
   # bin.bed files list only bins with reads, so samples have different bins:
   # join on bin coordinates, treat missing bins as zero coverage
   coverage <- coverage_files |>
-    set_names(\(f) str_remove(basename(f), fixed(".bin.bed"))) |>
+    set_names(\(f) label_of(str_remove(basename(f), fixed(".bin.bed")))) |>
     imap(\(f, s) fread(f, header = FALSE, col.names = c("chrom", "start", s), colClasses = list(character = 1))) |>
     purrr::reduce(\(a, b) merge(a, b, by = c("chrom", "start"), all = TRUE)) |>
     as_tibble() |>
@@ -358,21 +361,11 @@ if (nrow(coverage_data) > 0) {
   ) |>
     layout(
       title = list(text = "Sample Coverage Similarity", font = list(size = 18)),
-      xaxis = list(
-        title = "",
-        tickangle = 90,
-        tickfont = list(size = 12),
-        automargin = TRUE
-      ),
-      yaxis = list(
-        title = "",
-        tickfont = list(size = 12),
-        automargin = TRUE
-      ),
-      height = 1600,
-      width = 1600,  
-      autosize = FALSE,
-      margin = list(l = 200, r = 100, t = 100, b = 200)
+      xaxis = list(title = "", tickangle = 90, tickfont = list(size = 11), automargin = TRUE),
+      yaxis = list(title = "", tickfont = list(size = 11), automargin = TRUE),
+      height = heatmap_size(nrow(correlation_matrix_ordered)),
+      width = heatmap_size(nrow(correlation_matrix_ordered)),
+      autosize = FALSE
     )
 } else {
   cat("No coverage data available\n")
@@ -445,7 +438,8 @@ create_peak_width_plot <- function(peak_width_data, sample_data, method_name, bi
   plot_data <- peak_width_data |>
     left_join(sample_data, by = c("sample_id" = "sampleID")) |>
     filter(!is.na(condition)) |>
-    select(sample_id, condition, width)
+    select(sample_id, condition, width) |>
+    mutate(sample_id = label_of(sample_id))
 
   plot_data |>
     ggplot(aes(x = width, fill = sample_id)) +
@@ -476,6 +470,7 @@ ggplotly(seacr_width_plot) |>
 if (nrow(seacr_width) > 0) {
   seacr_width_cat_plot <- seacr_width |>
       select(sampleID, condition, pct_narrow, pct_broad) |>
+      mutate(sampleID = label_of(sampleID)) |>
       pivot_longer(cols = c(pct_narrow, pct_broad), names_to = "category", values_to = "percentage") |>
       mutate(category = ifelse(category == "pct_narrow", "Narrow", "Broad")) |>
       ggplot(aes(x = sampleID, y = percentage, fill = category)) +
@@ -512,8 +507,8 @@ calculate_peak_similarity_from_files <- function(files, file_suffix, method_name
       gr2 <- GRanges(peaks2$chr, IRanges(peaks2$start, peaks2$end))
 
       tibble(
-        sample1 = str_remove(basename(.x[1]), file_suffix),
-        sample2 = str_remove(basename(.x[2]), file_suffix),
+        sample1 = label_of(str_remove(basename(.x[1]), file_suffix)),
+        sample2 = label_of(str_remove(basename(.x[2]), file_suffix)),
         unionset = length(union(gr1, gr2)),
         overlapset = length(intersect(gr1, gr2))
       )
@@ -608,21 +603,11 @@ create_similarity_matrix_plot <- function(similarity_data, method_name) {
   ) |>
     layout(
       title = list(text = paste(method_name, "Peak Similarity Matrix"), font = list(size = 18)),
-      xaxis = list(
-        title = "",
-        tickangle = 90,
-        tickfont = list(size = 12),
-        automargin = TRUE
-      ),
-      yaxis = list(
-        title = "",
-        tickfont = list(size = 12),
-        automargin = TRUE
-      ),
-      height = 1600,
-      width = 1600,
-      autosize = FALSE,
-      margin = list(l = 200, r = 100, t = 100, b = 200)
+      xaxis = list(title = "", tickangle = 90, tickfont = list(size = 11), automargin = TRUE),
+      yaxis = list(title = "", tickfont = list(size = 11), automargin = TRUE),
+      height = heatmap_size(length(sample_order)),
+      width = heatmap_size(length(sample_order)),
+      autosize = FALSE
     )
 }
 ```
@@ -705,6 +690,7 @@ ggplotly(macs3_width_plot) |>
 if (nrow(macs3_width) > 0) {
   macs3_width_cat_plot <- macs3_width |>
       select(sampleID, condition, pct_narrow, pct_broad) |>
+      mutate(sampleID = label_of(sampleID)) |>
       pivot_longer(cols = c(pct_narrow, pct_broad), names_to = "category", values_to = "percentage") |>
       mutate(category = ifelse(category == "pct_narrow", "Narrow", "Broad")) |>
       ggplot(aes(x = sampleID, y = percentage, fill = category)) +
@@ -762,15 +748,18 @@ Column {data-width=450}
 ```{r}
 reads_plot_data <- region_enrichment |> filter(sample != "consensus", !is.na(reads_fold))
 if (nrow(reads_plot_data) > 0) {
+  # horizontal bars: sample labels on the y axis, grouped by condition
   reads_plot <- reads_plot_data |>
-    ggplot(aes(x = sample, y = reads_fold, fill = condition)) +
+    arrange(condition, sample) |>
+    mutate(sample = fct_rev(fct_inorder(label_of(sample)))) |>
+    ggplot(aes(x = reads_fold, y = sample, fill = condition)) +
     geom_col(alpha = 0.85) +
-    geom_hline(yintercept = 1, linetype = "dashed", colour = "grey40") +
-    facet_wrap(~ region, scales = "free_y", ncol = 1) +
+    geom_vline(xintercept = 1, linetype = "dashed", colour = "grey40") +
+    facet_wrap(~ region, scales = "free_x", nrow = 1) +
     scale_fill_viridis_d(option = "plasma", begin = 0.1, end = 0.85) +
     simple_theme() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-    labs(x = "", y = "Fold enrichment", fill = "Condition")
+    theme(axis.text.y = element_text(size = 7), legend.position = "none") +
+    labs(x = "Fold enrichment", y = "", fill = "Condition")
   ggplotly(reads_plot)
 } else {
   div(class = "alert alert-info", "No region enrichment data")

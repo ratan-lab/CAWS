@@ -101,16 +101,33 @@ for sid, g in units.groupby("sampleID", sort=False):
     dedup_values = sorted({str(v).strip().lower() for v in g["dedup"].dropna()} - {""}) if "dedup" in g else []
     if len(dedup_values) > 1:
         UNIT_ERRORS.append(f"Sample {sid}: rows disagree in the dedup column ({dedup_values})")
+    # optional short name for plots; the sampleID stays the name of files and table rows
+    labels = sorted({str(v).strip() for v in g["label"].dropna()} - {""}) if "label" in g else []
+    if len(labels) > 1:
+        UNIT_ERRORS.append(f"Sample {sid}: rows disagree in the label column ({labels})")
+    label = labels[0] if labels else sid
+    if not re.fullmatch(r"[A-Za-z0-9._+-]+", label):
+        UNIT_ERRORS.append(f"Sample {sid}: label '{label}' may only contain letters, digits and . _ + -")
     sample_rows.append({
         "sampleID": sid,
         "condition": g["condition"].iloc[0],
         "group": g["group"].iloc[0],
         "is_paired": bool(g["is_paired"].iloc[0]),
         "dedup": dedup_values[0] if dedup_values else "",
+        "label": label,
         "input": "BAM" if g["is_bam"].all() else ("FASTQ" if not g["is_bam"].any() else "FASTQ+BAM"),
         "units": len(g),
     })
 samplesheet = pd.DataFrame(sample_rows).set_index("sampleID")
+for label, ids in samplesheet.groupby("label").groups.items():
+    if len(ids) > 1:
+        UNIT_ERRORS.append(f"Label '{label}' is used by several samples ({', '.join(ids)}); labels must be unique")
+LABELS = samplesheet["label"].to_dict()
+
+
+def heatmap_width(labels):
+    """deepTools heatmap column width (cm) so that sample titles do not run into each other."""
+    return round(max(4.0, 0.24 * max(len(l) for l in labels)), 1)
 SAMPLE_UNITS = {sid: units.index[units["sampleID"] == sid].tolist() for sid in samplesheet.index}
 UNIT_LIST = units.index.tolist()
 FASTQ_PE_UNITS = units.index[~units["is_bam"] & units["is_paired"]].tolist()
@@ -834,6 +851,7 @@ rule count_spikein:
 SAMPLE_TABLE = samplesheet.reset_index()[["sampleID", "condition", "group", "input", "units"]].assign(
     layout=["PE" if p else "SE" for p in samplesheet["is_paired"]],
     deduplicated=["yes" if DEDUP[s] else "no" for s in samplesheet.index],
+    label=samplesheet["label"].tolist(),  # last, so the other columns keep their positions
 ).to_csv(sep="\t", index=False)
 
 rule sample_table:
@@ -1325,6 +1343,9 @@ rule make_peak_heatmap:
     conda:
         "envs/deeptools.yaml"
     threads: 2
+    params:
+        label=lambda w: LABELS[w.sample],
+        width=lambda w: heatmap_width([LABELS[w.sample]]),
     shell:
         """
         if [ -s {input.peaks} ]; then
@@ -1340,7 +1361,7 @@ rule make_peak_heatmap:
             plotHeatmap -m {output.mat} -out {output.heatmap} --sortUsing sum \
             --startLabel "Peak Start" --endLabel "Peak End" \
             --xAxisLabel "" \
-            --regionsLabel "Peaks" --samplesLabel "{wildcards.sample}"
+            --regionsLabel "Peaks" --samplesLabel {params.label} --heatmapWidth {params.width}
         else
             touch {output.peaks}
             touch {output.mat}
@@ -1384,8 +1405,6 @@ if config["gtf_file"]:
 # ---------------------------------------------------------------------------
 # Enrichment over region sets: signal profile, reads in regions, peak overlap
 # ---------------------------------------------------------------------------
-OKABE_ITO = ['#E69F00', '#56B4E9', '#009E73', '#F0E442', '#0072B2', '#D55E00', '#CC79A7', '#000000']
-
 rule prepare_regions:
     input:
         bed=lambda w: REGION_FILES[w.region],
@@ -1426,6 +1445,7 @@ rule region_profile:
     input:
         points="annotations/regions/{region}.points.bed",
         bw=expand("bigwig/{sample}.bw", sample=SAMPLES),
+        samples="stats/samples.tsv",
     output:
         matrix="stats/enrichment/{region}_matrix.gz",
         score="stats/enrichment/{region}_profile_score.txt",
@@ -1437,19 +1457,20 @@ rule region_profile:
         "envs/deeptools.yaml"
     threads: 4
     params:
-        labels=" ".join(SAMPLES),
-        colors=" ".join(f"'{OKABE_ITO[i % len(OKABE_ITO)]}'" for i in range(len(SAMPLES))),
+        ids=" ".join(SAMPLES),  # the matrix keeps sampleIDs (profile scores are keyed by them)
+        labels=" ".join(LABELS[s] for s in SAMPLES),
+        width=heatmap_width(LABELS[s] for s in SAMPLES),
         ylabel="Mean signal per 10,000 spike-in fragments" if SPIKEIN_NORM else "Mean CPM",
     shell:
         """
-        computeMatrix reference-point -S {input.bw} -R {input.points} --samplesLabel {params.labels} \\
+        computeMatrix reference-point -S {input.bw} -R {input.points} --samplesLabel {params.ids} \\
             --referencePoint center -a 2000 -b 2000 --binSize 50 --skipZeros --missingDataAsZero \\
             -o {output.matrix} -p {threads} 2> {log}
-        plotProfile -m {output.matrix} -out {output.profile} --averageType mean --perGroup \\
-            --colors {params.colors} --refPointLabel "{wildcards.region}" \\
-            --plotTitle "{wildcards.region}" --yAxisLabel "{params.ylabel}" 2>> {log}
-        plotHeatmap -m {output.matrix} -out {output.heatmap} --colorMap viridis \\
-            --refPointLabel "{wildcards.region}" --regionsLabel "{wildcards.region}" 2>> {log}
+        # one panel per condition, legends under the panels
+        python3 {workflow.basedir}/scripts/plot_region_profile.py {output.matrix} {input.samples} \\
+            "{wildcards.region}" "{params.ylabel}" {output.profile} >> {log} 2>&1
+        plotHeatmap -m {output.matrix} -out {output.heatmap} --colorMap viridis --samplesLabel {params.labels} \\
+            --heatmapWidth {params.width} --refPointLabel "{wildcards.region}" --regionsLabel "{wildcards.region}" 2>> {log}
         python3 {workflow.basedir}/scripts/calculate_profile_enrichment.py {output.matrix} {output.score} >> {log} 2>&1
         """
 
@@ -1896,7 +1917,7 @@ rule igv_session:
             genome = os.path.abspath(config["reference_fa"] if genome.endswith(".sizes") else genome)
         # experimental samples grouped by condition, then controls
         order = sorted(EXPERIMENT, key=lambda s: (samplesheet.loc[s, "condition"], s)) + CONTROL
-        tracks = [(f"{s}.tdf", s) for s in order]
+        tracks = [(f"{s}.tdf", LABELS[s]) for s in order]
         tracks += [(f"../{p}", f"{Path(p).parts[-2]} consensus: {Path(p).name.removesuffix('.consensus.bed')}")
                    for p in input.consensus]
         tracks += [(f"../{p}", f"{Path(p).parts[-2]}: {Path(p).name.removesuffix('.peaks.stringent.bed').removesuffix(MACS_SUFFIX)}")

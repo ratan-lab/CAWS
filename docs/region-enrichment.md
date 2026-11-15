@@ -17,6 +17,6 @@ Region files can be BED, BED.gz or narrowPeak; only regions on the chromosomes i
 
 **Outputs:**
 - `stats/region_enrichment.txt` — one row per region set and sample (and per consensus peak set): profile score, reads-in-regions percentage and fold, peak-overlap percentage and fold for SEACR and MACS3, and the IgG ratios; also shown on the report's Region Enrichment page
-- `stats/enrichment/{region}_profile.pdf`, `_heatmap.png`, `_matrix.gz` — profile plot, heatmap and deepTools matrix
+- `stats/enrichment/{region}_profile.pdf`, `_heatmap.png`, `_matrix.gz` — profile plot (one panel per condition, IgG controls in the last panel, shared y axis), heatmap and deepTools matrix
 - `stats/enrichment/{region}_profile_score.txt`, `_reads.txt`, `_peaks.txt` — the three measures in detail
 - `annotations/tss.bed`, `annotations/regions/` — TSSs, reference points and merged regions
