@@ -316,11 +316,20 @@ Coverage Similarity{data-icon="fa-project-diagram"}
 process_coverage_files <- function(coverage_files) {
   if (length(coverage_files) == 0) return(tibble())
 
+  # bins sit on a 500 bp grid (w=500 in the Snakefile's bam_to_bed rules; keep in sync).
+  # For large genomes keep the same every stride-th grid bin
+  # in all samples before merging (the correlation uses at most 50,000 bins), so the
+  # merged table stays small: a full human-genome merge of many samples needs > 8 GB
+  est_rows <- max(file.size(coverage_files)) / 20  # ~20 bytes per line
+  stride <- max(1, floor(est_rows / 250000))
   # bin.bed files list only bins with reads, so samples have different bins:
   # join on bin coordinates, treat missing bins as zero coverage
   coverage <- coverage_files |>
     set_names(\(f) label_of(str_remove(basename(f), fixed(".bin.bed")))) |>
-    imap(\(f, s) fread(f, header = FALSE, col.names = c("chrom", "start", s), colClasses = list(character = 1))) |>
+    imap(\(f, s) {
+      bins <- fread(f, header = FALSE, col.names = c("chrom", "start", s), colClasses = list(character = 1))
+      bins[(start %/% 500) %% stride == 0]
+    }) |>
     purrr::reduce(\(a, b) merge(a, b, by = c("chrom", "start"), all = TRUE)) |>
     as_tibble() |>
     mutate(across(-c(chrom, start), \(x) replace_na(x, 0)))
