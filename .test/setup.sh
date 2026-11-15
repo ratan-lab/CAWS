@@ -38,13 +38,14 @@ gzip -dc "$DATA/ref/genes.gtf.gz" | awk -F'\t' -v OFS='\t' '$3 == "gene" {
 {
     # K27me3_rep1: two runs (technical replicates); K27me3_rep2: BAM input
     # dedup column: K27me3_rep2 overrides the default ("controls") to exercise per-sample deduplication
-    printf "sampleID\tcondition\tgroup\tread1\tread2\tdedup\n"
-    printf "K27me3_rep1\tH3K27me3\tPE\t%s\t%s\t\n" "$RUN/fastq/K27me3_rep1_runA_R1.fq.gz" "$RUN/fastq/K27me3_rep1_runA_R2.fq.gz"
-    printf "K27me3_rep1\tH3K27me3\tPE\t%s\t%s\t\n" "$RUN/fastq/K27me3_rep1_runB_R1.fq.gz" "$RUN/fastq/K27me3_rep1_runB_R2.fq.gz"
-    printf "K27me3_rep2\tH3K27me3\tPE\t%s\t\tyes\n" "$RUN/bam/K27me3_rep2.bam"
-    printf "IgG_PE\tControl\tPE\t%s\t%s\t\n" "$F/IgG_R1.fq.gz" "$F/IgG_R2.fq.gz"
-    printf "K27me3_SE\tH3K27me3\tSE\t%s\t-\t\n" "$F/K27me3_SE_R1.fq.gz"
-    printf "IgG_SE\tControl\tSE\t%s\t-\t\n" "$F/IgG_R1.fq.gz"
+    # label column: short plot names for two samples, the others fall back to the sampleID
+    printf "sampleID\tcondition\tgroup\tread1\tread2\tdedup\tlabel\n"
+    printf "K27me3_rep1\tH3K27me3\tPE\t%s\t%s\t\tK27_1\n" "$RUN/fastq/K27me3_rep1_runA_R1.fq.gz" "$RUN/fastq/K27me3_rep1_runA_R2.fq.gz"
+    printf "K27me3_rep1\tH3K27me3\tPE\t%s\t%s\t\tK27_1\n" "$RUN/fastq/K27me3_rep1_runB_R1.fq.gz" "$RUN/fastq/K27me3_rep1_runB_R2.fq.gz"
+    printf "K27me3_rep2\tH3K27me3\tPE\t%s\t\tyes\t\n" "$RUN/bam/K27me3_rep2.bam"
+    printf "IgG_PE\tControl\tPE\t%s\t%s\t\tIgG_1\n" "$F/IgG_R1.fq.gz" "$F/IgG_R2.fq.gz"
+    printf "K27me3_SE\tH3K27me3\tSE\t%s\t-\t\t\n" "$F/K27me3_SE_R1.fq.gz"
+    printf "IgG_SE\tControl\tSE\t%s\t-\t\t\n" "$F/IgG_R1.fq.gz"
 } > "$RUN/samplesheet.tsv"
 
 cat > "$RUN/config.json" <<EOF

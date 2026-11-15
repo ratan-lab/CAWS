@@ -46,5 +46,7 @@ check "consensus summary has seacr and macs3 rows" '[ $(tail -n +2 "$OUT/stats/c
 check "MultiQC report exists" '[ -s "$OUT/reports/multiqc_report.html" ]'
 check "software versions recorded" 'grep -q "^bowtie" "$OUT/reports/pipeline_info/software_versions.tsv"'
 check "IGV session lists all TDF tracks" '[ $(grep -c "\.tdf\"" "$OUT/tdf/igv_session.xml") -eq 5 ]'
+check "sample labels used (K27_1) with sampleID fallback (K27me3_SE)" 'grep -q "name=\"K27_1\" path=\"K27me3_rep1.tdf\"" "$OUT/tdf/igv_session.xml" && grep -q "name=\"K27me3_SE\"" "$OUT/tdf/igv_session.xml"'
+check "region profile plotted" '[ -s "$OUT/stats/enrichment/TSS_profile.pdf" ]'
 
 exit $fail
