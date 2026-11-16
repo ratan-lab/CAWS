@@ -1915,16 +1915,23 @@ rule igv_session:
         if os.path.isfile(genome):
             # IGV cannot use a chrom.sizes file as a genome; use the indexed reference FASTA instead
             genome = os.path.abspath(config["reference_fa"] if genome.endswith(".sizes") else genome)
+        # one Okabe-Ito color per condition (shared by its replicates, peaks and consensus
+        # peaks), IgG controls in gray; colors repeat after seven conditions
+        palette = ["230,159,0", "86,180,233", "0,158,115", "240,228,66", "0,114,178", "213,94,0", "204,121,167"]
+        conditions = sorted({samplesheet.loc[s, "condition"] for s in EXPERIMENT})
+        color = {c: palette[i % len(palette)] for i, c in enumerate(conditions)} | {"Control": "136,136,136"}
         # experimental samples grouped by condition, then controls
         order = sorted(EXPERIMENT, key=lambda s: (samplesheet.loc[s, "condition"], s)) + CONTROL
-        tracks = [(f"{s}.tdf", LABELS[s]) for s in order]
-        tracks += [(f"../{p}", f"{Path(p).parts[-2]} consensus: {Path(p).name.removesuffix('.consensus.bed')}")
-                   for p in input.consensus]
-        tracks += [(f"../{p}", f"{Path(p).parts[-2]}: {Path(p).name.removesuffix('.peaks.stringent.bed').removesuffix(MACS_SUFFIX)}")
-                   for p in input.peaks]
+        tracks = [(f"{s}.tdf", LABELS[s], samplesheet.loc[s, "condition"]) for s in order]
+        for p in input.consensus:
+            condition = Path(p).name.removesuffix(".consensus.bed")
+            tracks.append((f"../{p}", f"{Path(p).parts[-2]} consensus: {condition}", condition))
+        for p in input.peaks:
+            sample = Path(p).name.removesuffix(".peaks.stringent.bed").removesuffix(MACS_SUFFIX)
+            tracks.append((f"../{p}", f"{Path(p).parts[-2]}: {LABELS[sample]}", samplesheet.loc[sample, "condition"]))
         with open(output[0], "w") as out:
             out.write('<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n')
             out.write(f'<Session genome={quoteattr(genome)} locus="All" version="8">\n    <Resources>\n')
-            for path, name in tracks:
-                out.write(f"        <Resource name={quoteattr(name)} path={quoteattr(path)}/>\n")
+            for path, name, condition in tracks:
+                out.write(f"        <Resource name={quoteattr(name)} path={quoteattr(path)} color={quoteattr(color[condition])}/>\n")
             out.write("    </Resources>\n</Session>\n")

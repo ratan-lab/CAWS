@@ -26,7 +26,7 @@ output_directory/
 
 **Note on alignments**: every sample has its BAM in `dedupalignments/`: deduplicated where `dedup` applies, otherwise an unchanged copy of the alignments. The raw `alignments/{sample}.sorted.bam` (and index) are temporary and removed once all steps that use them have finished; run with `--notemp` to keep them. The same applies to the adapter-trimmed reads in `trimmed/`.
 
-**Note on IGV sessions**: open `tdf/igv_session.xml` in IGV (File → Open Session) to load the TDF tracks of all samples (experimental samples grouped by condition, then controls), the consensus peaks and the per-sample peak calls. Paths are relative, so keep the output directory layout when copying it.
+**Note on IGV sessions**: open `tdf/igv_session.xml` in IGV (File → Open Session) to load the TDF tracks of all samples (experimental samples grouped by condition, then controls), the consensus peaks and the per-sample peak calls. Tracks are colored by condition (the coverage, peaks and consensus peaks of a condition share one color, IgG controls are gray). Paths are relative, so keep the output directory layout when copying it.
 
 **Note on consensus peaks**: `peaks/consensus/{seacr,macs3}/{condition}.consensus.bed` lists, for each consensus peak, the number and names of supporting replicates. Conditions with a single replicate have no consensus peaks.
 
