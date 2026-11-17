@@ -39,12 +39,13 @@ gzip -dc "$DATA/ref/genes.gtf.gz" | awk -F'\t' -v OFS='\t' '$3 == "gene" {
     # K27me3_rep1: two runs (technical replicates); K27me3_rep2: BAM input
     # dedup column: K27me3_rep2 overrides the default ("controls") to exercise per-sample deduplication
     # label column: short plot names for two samples, the others fall back to the sampleID
+    # K27me3_SE is its own condition (H3K27me3_SE) so that a comparison can be tested
     printf "sampleID\tcondition\tgroup\tread1\tread2\tdedup\tlabel\n"
     printf "K27me3_rep1\tH3K27me3\tPE\t%s\t%s\t\tK27_1\n" "$RUN/fastq/K27me3_rep1_runA_R1.fq.gz" "$RUN/fastq/K27me3_rep1_runA_R2.fq.gz"
     printf "K27me3_rep1\tH3K27me3\tPE\t%s\t%s\t\tK27_1\n" "$RUN/fastq/K27me3_rep1_runB_R1.fq.gz" "$RUN/fastq/K27me3_rep1_runB_R2.fq.gz"
     printf "K27me3_rep2\tH3K27me3\tPE\t%s\t\tyes\t\n" "$RUN/bam/K27me3_rep2.bam"
     printf "IgG_PE\tControl\tPE\t%s\t%s\t\tIgG_1\n" "$F/IgG_R1.fq.gz" "$F/IgG_R2.fq.gz"
-    printf "K27me3_SE\tH3K27me3\tSE\t%s\t-\t\t\n" "$F/K27me3_SE_R1.fq.gz"
+    printf "K27me3_SE\tH3K27me3_SE\tSE\t%s\t-\t\t\n" "$F/K27me3_SE_R1.fq.gz"
     printf "IgG_SE\tControl\tSE\t%s\t-\t\t\n" "$F/IgG_R1.fq.gz"
 } > "$RUN/samplesheet.tsv"
 
@@ -76,6 +77,7 @@ cat > "$RUN/config.json" <<EOF
     "macs3_broad": false,
     "macs3_broad_cutoff": 0.1,
     "consensus_min_replicates": 2,
+    "comparisons": {"K27_PE_vs_SE": ["H3K27me3", "H3K27me3_SE"]},
     "enrichment_regions": {
         "GeneBodies": "$RUN/ref/gene_bodies.bed"
     },
