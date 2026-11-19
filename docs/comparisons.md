@@ -36,32 +36,81 @@ A region supported only in one condition (e.g. `0/2` and `2/2`) is a candidate f
 
 ## Differential analysis
 
+`counts.tsv` is the count matrix and `samples.tsv` the sample table for DESeq2 or edgeR. Use the raw counts in `counts.tsv`, never CPM or bigWig values. The statistical analysis is left to the user. The steps below are a recommended starting point for DESeq2.
+
 With two replicates per condition DESeq2, edgeR and DiffBind work: they estimate variability across all regions, not from the two replicates of a single region. Power is lower than with three or more replicates, but the tests are valid. With one replicate per condition there is no variance estimate, and only fold changes can be ranked.
+
+**1. Read the data.** The columns of `counts.tsv` are the sampleIDs and match the rows of `samples.tsv`. Conditions are listed in the order of the comparison in the configuration. Setting the factor levels in that order makes the first listed condition the reference.
 
 ```r
 library(DESeq2)
 counts  <- read.delim("comparisons/DHX36_KD/counts.tsv", row.names = 1, check.names = FALSE)
 samples <- read.delim("comparisons/DHX36_KD/samples.tsv", row.names = 1)
-samples$condition <- factor(samples$condition)
-dds <- DESeqDataSetFromMatrix(counts, samples, design = ~ condition)
-
-# spike-in normalization (if the spike-in counts are high enough); omit for DESeq2's default
-sizeFactors(dds) <- samples$spikein_fragments / mean(samples$spikein_fragments)
-
-dds <- DESeq(dds)
-res <- results(dds, contrast = c("condition", "GM13069_cells_BG4_siDHX36", "GM13069_cells_BG4_siNC"))
+samples$condition <- factor(samples$condition, levels = unique(samples$condition))
+dds <- DESeqDataSetFromMatrix(counts, samples[colnames(counts), ], design = ~ condition)
 ```
 
-**Normalization decides the answer when the perturbation changes binding globally.** DESeq2's and edgeR's default normalizations assume that most regions do not change, so a global gain or loss is normalized away. Spike-in factors ([Normalization](normalization.md)) or `filtered_fragments` (library size) do not make that assumption. Running the test with two normalizations and reporting the regions that hold up under both is a robust choice. If they disagree a lot, the perturbation probably changed binding globally.
+**2. Pre-filter lightly.** Every region already passed the replicate-support filter, so drop only regions with almost no fragments. `results()` also filters low-count regions on its own (independent filtering), so stricter pre-filtering is not needed.
 
-**Checks with few replicates.** Replicates should cluster by condition in a PCA of the counts (e.g. DESeq2's `plotPCA(vst(dds))`), and the MA plot should be centered near zero unless a global change is expected.
+```r
+smallest_group <- min(table(samples$condition))
+dds <- dds[rowSums(counts(dds) >= 10) >= smallest_group, ]
+```
+
+**3. Choose the normalization.** DESeq2's and edgeR's default normalizations assume that most regions do not change. Counted over peaks only, this assumption is stronger than for RNA-seq, and a perturbation that changes binding globally is normalized away. Library size (`filtered_fragments`) and spike-in counts ([Normalization](normalization.md)) do not make that assumption.
+
+```r
+geo <- function(x) x / exp(mean(log(x)))
+dds_default <- estimateSizeFactors(dds)
+dds_libsize <- dds; sizeFactors(dds_libsize) <- geo(samples[colnames(dds), "filtered_fragments"])
+dds_spikein <- dds; sizeFactors(dds_spikein) <- geo(samples[colnames(dds), "spikein_fragments"])  # with spikein_genome
+```
+
+If the normalizations give similar results, the default is fine. If they disagree a lot, the perturbation probably changed binding globally. The spike-in factors are then the most trustworthy, provided each sample has thousands of spike-in fragments. Report which normalization was used, and preferably the regions that hold up under two of them.
+
+**4. Account for how replicates were processed.** If the replicates were processed in pairs (for example replicate 1 of every condition on the same day or with the same pA-Tn5 batch), add the pairing to the design. Add a `replicate` column to `samples` first. With two replicates per condition this costs one degree of freedom but often removes much of the noise.
+
+```r
+design(dds) <- ~ replicate + condition
+```
+
+**5. Check the samples.** Replicates should cluster by condition in a PCA, and the dispersion estimates should decrease smoothly with the mean. With two replicates, one outlier dominates the results, so check before trusting the list of regions. `vst()` needs at least 1,000 regions. For smaller region sets use `varianceStabilizingTransformation(dds, blind = TRUE)`.
+
+```r
+plotPCA(vst(dds, blind = TRUE), intgroup = "condition")
+dds <- DESeq(dds)
+plotDispEsts(dds)
+```
+
+**6. Test for a minimum effect and shrink fold changes.** Testing against a fold-change threshold (`lfcThreshold`, here 1.4-fold) gives valid p-values for "changed by more than", which filtering by fold change after the test does not. Shrunken fold changes keep regions with few fragments from dominating rankings, plots and heatmaps. Use them for those, and the unshrunken results for significance.
+
+```r
+res <- results(dds, contrast = c("condition", "GM13069_cells_BG4_siDHX36", "GM13069_cells_BG4_siNC"),
+               lfcThreshold = 0.5, alpha = 0.05)
+res_shrunk <- lfcShrink(dds, contrast = c("condition", "GM13069_cells_BG4_siDHX36", "GM13069_cells_BG4_siNC"),
+                        type = "ashr")
+plotMA(res_shrunk)
+```
+
+The MA plot should be centered near zero unless a global change is expected.
+
+**7. Interpret the regions.** Join the results to `regions.tsv` by `region_id` for the coordinates, summits and replicate support. Regions supported only in one condition (e.g. `0/2` and `2/2`) and significantly changed are the clearest gained or lost peaks. Inspect the top regions in IGV with the normalized tracks, and annotate them, for example with ChIPseeker.
+
+```r
+res_df <- as.data.frame(res) |> tibble::rownames_to_column("region_id") |>
+  dplyr::left_join(read.delim("comparisons/DHX36_KD/regions.tsv", check.names = FALSE), by = "region_id")
+```
+
+**Comparisons of more than two conditions.** A comparison can list more than two conditions. All of them then share one region set and one count matrix, and DESeq2 estimates variability from all samples. Test for any difference with `DESeq(dds, test = "LRT", reduced = ~ 1)`, then follow up with specific contrasts. For two factors, such as genotype and treatment, split `condition` into one column per factor and use a design such as `~ genotype + treatment + genotype:treatment`.
+
+**Duplicate removal.** Handle duplicates the same way in all samples of a comparison (`dedup`). Otherwise differences in duplicate removal appear as differences in binding.
 
 ## Configuration
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `comparisons` | `{}` | map of comparison name → list of conditions |
-| `comparison_window` | `250` | half-width (bp) of the regions around the summits; ±250 bp suits transcription factors, chromatin proteins and DNA structures (BG4, S9.6) |
+| `comparison_window` | `250` | half-width (bp) of the regions around the summits. ±250 bp suits transcription factors, chromatin proteins and DNA structures (BG4, S9.6) |
 | `comparison_qvalue` | `0.05` | MACS3 q-value cutoff for the pooled call |
 
 Adding a comparison to a finished run rebuilds the filtered fragment files of the samples involved (they are temporary), which takes about as long as the original filtering step. The replicate support uses `consensus_min_replicates`. For broad marks (H3K27me3, H3K36me3), set `macs3_broad: true` to use the pooled broad peaks as regions.
