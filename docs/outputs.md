@@ -13,6 +13,7 @@ output_directory/
 │   ├── seacr/           # SEACR peaks
 │   ├── macs3/           # MACS3 peaks
 │   └── consensus/       # pooled peak calls and consensus peaks per condition (seacr/, macs3/)
+├── comparisons/         # per comparison (optional): reference regions, count matrix, design table
 ├── stats/               # stats.txt, samples.tsv, peaks_consolidated.txt, consensus_peaks.txt, region_enrichment.txt
 │   ├── enrichment/      # per region set: profile plot, heatmap, matrix and the three enrichment measures
 │   ├── seacr/           # SEACR metrics, peak GC, peak heatmaps

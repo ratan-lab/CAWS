@@ -10,7 +10,7 @@ check() { if eval "$2"; then echo "ok   - $1"; else echo "FAIL - $1"; fail=1; fi
 check "stats.txt has 5 samples" '[ $(tail -n +2 "$OUT/stats/stats.txt" | wc -l) -eq 5 ]'
 check "alignment rate > 70% for every sample" \
     'tail -n +2 "$OUT/stats/stats.txt" | awk -F"\t" "{sub(/%/, \"\", \$5); if (\$5 + 0 <= 70) exit 1}"'
-check "peaks_consolidated.txt has one row per H3K27me3 sample" \
+check "peaks_consolidated.txt has one row per experimental sample" \
     '[ $(tail -n +2 "$OUT/stats/peaks_consolidated.txt" | wc -l) -eq 3 ]'
 for s in K27me3_rep1 K27me3_rep2 K27me3_SE; do
     check "$s SEACR peaks >= 10" '[ $(wc -l < "$OUT/peaks/seacr/$s.peaks.stringent.bed") -ge 10 ]'
@@ -48,6 +48,12 @@ check "software versions recorded" 'grep -q "^bowtie" "$OUT/reports/pipeline_inf
 check "IGV session lists all TDF tracks" '[ $(grep -c "\.tdf\"" "$OUT/tdf/igv_session.xml") -eq 5 ]'
 check "sample labels used (K27_1) with sampleID fallback (K27me3_SE)" 'grep -q "name=\"K27_1\" path=\"K27me3_rep1.tdf\"" "$OUT/tdf/igv_session.xml" && grep -q "name=\"K27me3_SE\"" "$OUT/tdf/igv_session.xml"'
 check "IGV tracks colored by condition (IgG gray)" 'grep -q "name=\"IgG_1\" path=\"IgG_PE.tdf\" color=\"136,136,136\"" "$OUT/tdf/igv_session.xml"'
+C="$OUT/comparisons/K27_PE_vs_SE"
+check "comparison regions >= 1" '[ $(tail -n +2 "$C/regions.tsv" | wc -l) -ge 1 ]'
+check "comparison count matrix: one row per region, one column per sample" \
+    '[ $(wc -l < "$C/counts.tsv") -eq $(wc -l < "$C/regions.tsv") ] && [ $(head -1 "$C/counts.tsv" | awk -F"\t" "{print NF}") -eq 4 ]'
+check "comparison design table lists 3 samples with spike-in counts" \
+    '[ $(tail -n +2 "$C/samples.tsv" | wc -l) -eq 3 ] && head -1 "$C/samples.tsv" | grep -q spikein_fragments'
 check "region profile plotted" '[ -s "$OUT/stats/enrichment/TSS_profile.pdf" ]'
 
 exit $fail
