@@ -55,6 +55,7 @@ nav:
       - Normalization: normalization.md
       - Region enrichment: region-enrichment.md
       - Consensus peaks: consensus-peaks.md
+      - Comparing conditions: comparisons.md
       - Peak width analysis: peak-widths.md
   - Troubleshooting: troubleshooting.md
   - Contributing: https://github.com/ratan-lab/CAWS/blob/main/CONTRIBUTING.md

@@ -29,6 +29,8 @@ Start from the template `config.json` in the repository. Keys marked *optional* 
 | `igv_genome` | Genome for IGV TDF generation and the IGV session: an igvtools genome ID (e.g., `"hg38"`, `"mm10"`) or a path to a chrom.sizes file (the session then uses `reference_fa` as the genome) |
 | `gtf_file` | Path to GTF file; its protein-coding TSSs become the built-in `TSS` region set (optional; `""` to skip) |
 | `enrichment_regions` | *Optional*, default `{}`: map of name → BED file (BED, BED.gz or narrowPeak) of regions to test for enrichment, e.g. `{"PQS": "/path/pqs.bed", "ATAC": "/path/atac_peaks.narrowPeak"}`. See [Region Enrichment](region-enrichment.md) |
+| `comparisons` | *Optional*, default `{}`: map of comparison name → list of two or more conditions, e.g. `{"DHX36_KD": ["BG4_siNC", "BG4_siDHX36"]}`. For each comparison CAWS writes a reference region set and a count matrix for DESeq2, edgeR or DiffBind. See [Comparing conditions](comparisons.md) |
+| `comparison_window`, `comparison_qvalue` | *Optional*, defaults `250` and `0.05`: half-width (bp) of the summit-centered regions, and the MACS3 q-value cutoff of the pooled peak call of a comparison |
 | `outdir` | Output directory for analysis results. Snakemake runs inside this directory |
 
 **Example `config.json`:**

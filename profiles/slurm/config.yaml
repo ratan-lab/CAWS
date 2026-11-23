@@ -127,6 +127,26 @@ set-resources:
     mem_mb: 16000
     runtime: "240m"
 
+  comparison_pool:
+    threads: 2
+    mem_mb: 8000
+    runtime: "120m"
+
+  comparison_macs:
+    threads: 1
+    mem_mb: 16000
+    runtime: "240m"
+
+  comparison_regions:
+    threads: 1
+    mem_mb: 4000
+    runtime: "60m"
+
+  comparison_counts:
+    threads: 1
+    mem_mb: 8000
+    runtime: "120m"
+
   multiqc:
     threads: 1
     mem_mb: 8000
